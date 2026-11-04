@@ -79,6 +79,7 @@
   "dependencies": {
     "@noble/curves": "^2.4.0",
     "@noble/hashes": "^2.4.0",
-    "@scure/bip32": "^2.4.0"
+    "@scure/bip32": "^2.4.0",
+    "@vercel/speed-insights": "^2.0.0"
   }
 }
