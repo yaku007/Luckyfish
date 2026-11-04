@@ -1,0 +1,152 @@
+.finder-page {
+  max-width: 820px;
+  margin: 0 auto;
+}
+
+.finder-panel {
+  padding: clamp(20px, 4vw, 34px);
+  background: #111113;
+  border: 1px solid #333;
+  border-radius: 12px;
+}
+
+.finder-form {
+  display: grid;
+  gap: 18px;
+}
+
+.finder-field {
+  display: grid;
+  gap: 8px;
+  color: hsl(var(--foreground));
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.finder-field input,
+.finder-field select {
+  width: 100%;
+  min-width: 0;
+  padding: 12px 13px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 9px;
+  outline: none;
+  background: #111113;
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-weight: 500;
+  transition: border-color 0.2s ease;
+}
+
+.finder-field input:focus,
+.finder-field select:focus {
+  border-color: #d86d31;
+  box-shadow: 0 0 0 3px rgba(216, 109, 49, 0.15);
+}
+
+.finder-field input:disabled,
+.finder-field select:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.finder-index-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.finder-note {
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.finder-note code {
+  color: #ffbd72;
+  background: rgba(255, 189, 114, 0.1);
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+.finder-status {
+  display: grid;
+  gap: 8px;
+  margin-top: 24px;
+  padding: 16px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 10px;
+  background: #161616;
+  color: hsl(var(--muted-foreground));
+  font-size: 13px;
+}
+
+.finder-status strong {
+  color: hsl(var(--foreground));
+  font-size: 15px;
+}
+
+.finder-error {
+  margin: 0;
+  color: #ff9a8a;
+  font-weight: 500;
+}
+
+.finder-match {
+  display: grid;
+  gap: 10px;
+  margin-top: 20px;
+  padding: 20px;
+  border: 1px solid rgba(92, 180, 130, 0.4);
+  border-radius: 10px;
+  background: rgba(25, 75, 52, 0.15);
+  overflow-wrap: anywhere;
+}
+
+.finder-match p {
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 14px;
+}
+
+.finder-match-address {
+  color: hsl(var(--foreground)) !important;
+  font-family: var(--app-font-mono);
+  font-size: 15px;
+  font-weight: bold;
+}
+
+/* تحسين مظهر الزر الرئيسي */
+.primary-button {
+  margin-top: 10px;
+  padding: 14px 20px;
+  border: none;
+  border-radius: 8px;
+  background: #d86d31;
+  color: white;
+  font-size: 15px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.1s ease;
+}
+
+.primary-button:hover:not(:disabled) {
+  background: #c25e25;
+}
+
+.primary-button:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.primary-button:disabled {
+  background: #555;
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+@media (max-width: 520px) {
+  .finder-index-row {
+    grid-template-columns: 1fr;
+  }
+}

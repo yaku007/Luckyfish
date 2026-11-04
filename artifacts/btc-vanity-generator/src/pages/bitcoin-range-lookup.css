@@ -1,0 +1,148 @@
+.range-lookup-page {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: clamp(44px, 7vw, 84px) clamp(20px, 5vw, 64px);
+}
+
+.range-lookup-intro {
+  max-width: 700px;
+  margin: 0 auto 34px;
+  text-align: center;
+}
+
+.range-lookup-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #ffbd72;
+  font-family: var(--app-font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.range-lookup-kicker svg { width: 15px; height: 15px; }
+.range-lookup-intro h1 { margin: 14px 0 12px; }
+.range-lookup-intro p { margin: 0; color: hsl(var(--muted-foreground)); font-size: 14px; line-height: 1.6; }
+
+.range-lookup-panel,
+.range-lookup-results {
+  min-width: 0;
+  padding: 24px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  background: hsl(var(--card));
+  box-shadow: var(--shadow);
+}
+
+.range-lookup-label {
+  margin: 0 0 7px;
+  color: hsl(var(--muted-foreground));
+  font-family: var(--app-font-mono);
+  font-size: 10px;
+  letter-spacing: .08em;
+}
+
+.range-lookup-panel h2,
+.range-lookup-results h2 {
+  margin: 0;
+  font-family: var(--app-font-display);
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.range-lookup-field {
+  display: grid;
+  gap: 8px;
+  margin-top: 22px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.range-lookup-field input {
+  width: 100%;
+  min-height: 46px;
+  padding: 0 13px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  outline: none;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font: 12px var(--app-font-mono);
+}
+
+.range-lookup-field input:focus { border-color: #e77732; box-shadow: 0 0 0 2px rgba(231, 119, 50, .16); }
+.range-lookup-field input::placeholder { color: hsl(var(--muted-foreground)); font: 13px var(--app-font-sans); }
+
+.range-lookup-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.range-lookup-search {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 13px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 7px;
+  background: transparent;
+  color: hsl(var(--foreground));
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.range-lookup-search svg { width: 16px; height: 16px; }
+.range-lookup-search { border-color: #e77732; background: #e77732; color: white; }
+.range-lookup-search:hover { background: #f08a43; }
+
+.range-lookup-scope {
+  flex: 1 1 220px;
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.range-lookup-format,
+.range-lookup-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 16px 0 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.range-lookup-format { display: block; }
+.range-lookup-format code { color: #ffbd72; }
+.range-lookup-notice svg { width: 15px; height: 15px; flex: 0 0 auto; }
+.range-lookup-notice.is-error { color: #ff9b8f; }
+
+.range-lookup-results { margin-top: 16px; }
+.range-lookup-results-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.range-lookup-results-heading > span { color: hsl(var(--muted-foreground)); font-family: var(--app-font-mono); font-size: 11px; }
+.range-lookup-table-wrap { overflow: auto; border: 1px solid hsl(var(--border)); border-radius: 8px; }
+.range-lookup-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; }
+.range-lookup-table th,
+.range-lookup-table td { padding: 11px 12px; border-bottom: 1px solid hsl(var(--border)); white-space: nowrap; }
+.range-lookup-table thead { background: hsl(var(--card)); color: hsl(var(--muted-foreground)); font-family: var(--app-font-mono); font-size: 10px; text-transform: uppercase; }
+.range-lookup-table tbody tr:last-child td { border-bottom: 0; }
+.range-lookup-table td { font-family: var(--app-font-mono); font-size: 11px; }
+.range-lookup-table td code { color: #ffbd72; }
+.range-lookup-empty { margin: 0; padding: 24px 12px; color: hsl(var(--muted-foreground)); text-align: center; font-size: 13px; }
+
+@media (max-width: 600px) {
+  .range-lookup-panel,
+  .range-lookup-results { padding: 16px; }
+  .range-lookup-panel h2,
+  .range-lookup-results h2 { font-size: 18px; }
+  .range-lookup-table th,
+  .range-lookup-table td { padding: 9px; }
+}
