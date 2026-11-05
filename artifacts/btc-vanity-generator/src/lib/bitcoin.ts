@@ -293,63 +293,58 @@ export function deriveBitcoinAddressOnly(
   return addressFromPublicKeyHash(getPublicKeyHash(privateKey), format);
 }
 
-export function privateKeyFromRangeValue(value: bigint): Uint8Array {
-  if (value < 1n || value >= PRIVATE_KEY_LIMIT) {
-    throw new Error("Range contains a private key outside the valid secp256k1 range.");
-  }
-  return bigIntToBytes(value);
-}
+// --- High Performance Search (Target Addresses List Mode + Batching) ---
 
-// --- Search Range (Brute Force) ---
-
-export async function searchRange(
-  startHex: string,
-  endHex: string,
-  targetAddress: string,
+export async function searchSpecificAddresses(
+  targetAddresses: string[], // List ديال les addresses لي بغيتي تقلب عليهم
   format: AddressFormat = "legacy",
-  onProgress?: (currentKey: bigint, speed: number) => void,
+  maxIterations: number = 100_000_000,
+  onProgress?: (currentKeyHex: string, speed: number, checkedCount: number) => void,
   onFound?: (result: { privateKeyHex: string; privateKeyWif: string; address: string }) => void
 ): Promise<boolean> {
-  const start = BigInt(`0x${startHex}`);
-  const end = BigInt(`0x${endHex}`);
+  // كنحولو List ل Set باش الـ lookup يكون سرييع O(1)
+  const targetSet = new Set(targetAddresses.map((addr) => addr.trim()));
 
-  if (start < 1n) throw new Error("Start key must be at least 1");
-  if (end >= PRIVATE_KEY_LIMIT) throw new Error("End key exceeds secp256k1 limit");
-  if (start > end) throw new Error("Start key must be less than or equal to end key");
+  if (targetSet.size === 0) {
+    throw new Error("Target addresses list cannot be empty.");
+  }
 
-  let current = start;
   let iterations = 0;
   const startTime = performance.now();
+  const BATCH_SIZE = 10000; // ⚡ Batch size كبير شوية باش نرفعو Keys / Second
 
-  while (current <= end) {
-    const privateKeyBytes = privateKeyFromRangeValue(current);
-    const result = deriveBitcoinAddress(privateKeyBytes, format);
+  while (iterations < maxIterations) {
+    let lastKeyHex = "";
+    
+    for (let i = 0; i < BATCH_SIZE; i++) {
+      const privateKeyBytes = randomPrivateKey();
+      lastKeyHex = privateKeyToHex(privateKeyBytes);
+      const result = deriveBitcoinAddress(privateKeyBytes, format);
 
-    if (result.address === targetAddress) {
-      if (onFound) {
-        onFound({
-          privateKeyHex: result.privateKeyHex,
-          privateKeyWif: result.privateKeyWif,
-          address: result.address
-        });
+      if (targetSet.has(result.address)) {
+        if (onFound) {
+          onFound({
+            privateKeyHex: result.privateKeyHex,
+            privateKeyWif: result.privateKeyWif,
+            address: result.address
+          });
+        }
+        return true;
       }
-      return true;
+      iterations++;
     }
 
-    iterations++;
+    const elapsed = (performance.now() - startTime) / 1000;
+    const speed = elapsed > 0 ? Math.floor(iterations / elapsed) : 0;
 
-    if (onProgress && iterations % 2000 === 0) {
-      const elapsed = (performance.now() - startTime) / 1000;
-      const speed = Math.floor(iterations / elapsed);
-      onProgress(current, speed);
+    if (onProgress) {
+      onProgress(lastKeyHex, speed, iterations);
     }
 
-    current += 1n;
-
-    if (iterations % 2000 === 0) {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    }
+    // Yield للـ UI thread باش الميكروبروسيسور مايبلokis
+    await new Promise((resolve) => setTimeout(resolve, 1));
   }
+
   return false;
 }
 
@@ -377,23 +372,25 @@ export async function searchHDAddresses(
 
   let iterations = 0;
   const startTime = performance.now();
+  const BATCH_SIZE = 2000;
 
   for (let index = startIndex; index <= endIndex; index++) {
     const child = master.derive(`m/0/0/${index}`);
+    if (!child.publicKey) continue;
 
     let address: string;
-    let wif: string | undefined;
-    let hex: string | undefined;
+    const pubHash = hash160(child.publicKey);
 
     if (format === "legacy") {
-      const pubHash = hash160(child.publicKey!);
       address = base58Check(Uint8Array.of(0x00, ...pubHash));
     } else {
-      const pubHash = hash160(child.publicKey!);
       address = segwitAddress(pubHash);
     }
 
     if (address === targetAddress) {
+      let wif: string | مفتاح | undefined;
+      let hex: string | undefined;
+
       if (child.privateKey) {
         const wifPayload = new Uint8Array(34);
         wifPayload[0] = 0x80;
@@ -416,15 +413,14 @@ export async function searchHDAddresses(
 
     iterations++;
 
-    if (onProgress && iterations % 1000 === 0) {
+    if (iterations % BATCH_SIZE === 0) {
       const elapsed = (performance.now() - startTime) / 1000;
-      const speed = Math.floor(iterations / elapsed);
-      onProgress(index, address, speed);
-    }
-
-    if (iterations % 1000 === 0) {
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      const speed = elapsed > 0 ? Math.floor(iterations / elapsed) : 0;
+      if (onProgress) {
+        onProgress(index, address, speed);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1));
     }
   }
   return false;
-}
+                       }
