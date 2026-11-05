@@ -25,7 +25,7 @@ export const CHAIN_RPC_URLS: Record<Exclude<MultiChainName, 'btc'>, string> = {
 };
 
 // ── Batch & Chunk Settings ──────────────────────────────────────────────────
-export const EVM_ADDRESSES_PER_REQUEST = 100; // Limit mzyan l kol batch bach n-evitiw HTTP 429
+export const EVM_ADDRESSES_PER_REQUEST = 198; // Limit mzyan l kol batch bach n-evitiw HTTP 429
 const EVM_RPC_MAX_ATTEMPTS = 6;
 const EVM_RPC_MAX_RETRY_DELAY_MS = 60_000;
 
