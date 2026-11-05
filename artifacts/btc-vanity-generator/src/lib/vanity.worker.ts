@@ -20,6 +20,8 @@ import {
 } from "./vanity-protocol";
 
 const MAX_CANDIDATES_BETWEEN_YIELDS = 32;
+const MAX_RANDOM_VANITY_SLICE_MS = 32;
+const RANDOM_VANITY_TIME_CHECK_INTERVAL = 64;
 
 const worker = self as unknown as {
   onmessage: ((event: MessageEvent<WorkerRequest>) => void) | null;
@@ -138,6 +140,9 @@ worker.onmessage = (event) => {
         throw new Error("Candidate history limit is outside the allowed range.");
       }
       let lastReportAt = 0;
+      let lastYieldAt = performance.now();
+      const isRandomVanitySearch =
+        options.mode === "random" && !options.targetAddress;
       const flushCandidates = () => {
         if (pendingCandidates.length === 0) return;
         worker.postMessage({
@@ -150,7 +155,11 @@ worker.onmessage = (event) => {
       while (!stopRequested) {
         for (
           let count = 0;
-          count < MAX_CANDIDATES_BETWEEN_YIELDS && !stopRequested;
+          count <
+            (isRandomVanitySearch
+              ? MAX_CANDIDATES_BETWEEN_YIELDS * RANDOM_VANITY_TIME_CHECK_INTERVAL
+              : MAX_CANDIDATES_BETWEEN_YIELDS) &&
+          !stopRequested;
           count += 1
         ) {
           if (options.mode === "range" && cursor > end) {
@@ -230,6 +239,14 @@ worker.onmessage = (event) => {
             reportHistoryLimit(attempts, startedAt);
             return;
           }
+
+          if (
+            isRandomVanitySearch &&
+            (count + 1) % RANDOM_VANITY_TIME_CHECK_INTERVAL === 0 &&
+            performance.now() - lastYieldAt >= MAX_RANDOM_VANITY_SLICE_MS
+          ) {
+            break;
+          }
         }
 
         const now = performance.now();
@@ -245,7 +262,13 @@ worker.onmessage = (event) => {
           lastReportAt = now;
         }
 
-        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        if (
+          isRandomVanitySearch ||
+          attempts % MAX_CANDIDATES_BETWEEN_YIELDS === 0
+        ) {
+          lastYieldAt = performance.now();
+          await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        }
       }
 
       flushCandidates();
