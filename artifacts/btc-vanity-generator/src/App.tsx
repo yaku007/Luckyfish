@@ -9,6 +9,7 @@ import {
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ErrorBoundary } from '@/components/error-boundary';
 import DonationAddress from '@/components/donation-address';
+import ProcessingVisualizer from '@/components/processing-visualizer';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import NotFound from '@/pages/not-found';
@@ -69,15 +70,72 @@ import {
 const queryClient = new QueryClient();
 
 const RANGE_RESUME_STORAGE_KEY = 'bitcoin-vanity-generator:range-resume:v1';
+const USER_PREFERENCES_STORAGE_KEY = 'lucky-btc:user-preferences:v1';
 const MAX_CPU_WORKERS = 32;
 
 type GeneratedCandidateRecord = CandidateRecord & { privateKeyHex: string };
+type UserPreferences = {
+  cpuWorkers: number;
+  format: AddressFormat;
+  chain: MultiChainName;
+  patternPosition: 'prefix' | 'suffix';
+};
 
 function getMaxCpuWorkers(): number {
   const reportedCores = typeof navigator === 'undefined' ? 2 : navigator.hardwareConcurrency;
   const availableCores = Number.isInteger(reportedCores) && reportedCores > 0 ? reportedCores : 2;
   const optimizedCores = Math.max(availableCores, 8); 
   return Math.max(1, Math.min(optimizedCores, MAX_CPU_WORKERS));
+}
+
+function isMultiChainName(value: unknown): value is MultiChainName {
+  return typeof value === 'string' && MULTI_CHAIN_OPTIONS.some((option) => option.id === value);
+}
+
+function parseUserPreferences(value: unknown, maxWorkers: number): UserPreferences | null {
+  if (!value || typeof value !== 'object') return null;
+  const preferences = value as Record<string, unknown>;
+  const cpuWorkers = preferences.cpuWorkers;
+  if (
+    typeof cpuWorkers !== 'number' ||
+    !Number.isInteger(cpuWorkers) ||
+    cpuWorkers < 1 ||
+    cpuWorkers > maxWorkers ||
+    (preferences.format !== 'legacy' && preferences.format !== 'segwit') ||
+    !isMultiChainName(preferences.chain) ||
+    (preferences.patternPosition !== 'prefix' && preferences.patternPosition !== 'suffix')
+  ) {
+    return null;
+  }
+  return {
+    cpuWorkers,
+    format: preferences.format,
+    chain: preferences.chain,
+    patternPosition: preferences.patternPosition,
+  };
+}
+
+function readUserPreferences(maxWorkers: number): UserPreferences | null {
+  try {
+    const saved = window.localStorage.getItem(USER_PREFERENCES_STORAGE_KEY);
+    if (!saved) return null;
+    const parsed: unknown = JSON.parse(saved);
+    const preferences = parseUserPreferences(parsed, maxWorkers);
+    if (preferences) return preferences;
+    window.localStorage.removeItem(USER_PREFERENCES_STORAGE_KEY);
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function saveUserPreferences(preferences: UserPreferences): boolean {
+  try {
+    window.localStorage.setItem(USER_PREFERENCES_STORAGE_KEY, JSON.stringify(preferences));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 type RangeResumeSettings = {
@@ -192,16 +250,17 @@ function clearRangeResumeSettings(): boolean {
 function Home() {
   const [, setLocation] = useLocation();
   const maxCpuWorkers = getMaxCpuWorkers();
-  const [cpuWorkers, setCpuWorkers] = useState(maxCpuWorkers);
+  const [savedPreferences] = useState(() => readUserPreferences(maxCpuWorkers));
+  const [cpuWorkers, setCpuWorkers] = useState(savedPreferences?.cpuWorkers ?? maxCpuWorkers);
   const [resumeLoad] = useState(readRangeResumeSettings);
   const initialResume = resumeLoad.settings;
 
   const [mode, setMode] = useState<'secure' | 'range'>(() => initialResume ? 'range' : 'secure');
   const [target, setTarget] = useState('');
   const [exactTarget, setExactTarget] = useState('');
-  const [patternPosition, setPatternPosition] = useState<'prefix' | 'suffix'>('prefix');
-  const [format, setFormat] = useState<AddressFormat>(() => initialResume?.format ?? 'legacy');
-  const [chain, setChain] = useState<MultiChainName>('btc');
+  const [format, setFormat] = useState<AddressFormat>(() => initialResume?.format ?? savedPreferences?.format ?? 'legacy');
+  const [chain, setChain] = useState<MultiChainName>(() => savedPreferences?.chain ?? 'btc');
+  const [patternPosition, setPatternPosition] = useState<'prefix' | 'suffix'>(() => savedPreferences?.patternPosition ?? 'prefix');
 
   const [rangeStart, setRangeStart] = useState(() => initialResume?.startHex ?? '');
   const [rangeEnd, setRangeEnd] = useState(() => initialResume?.endHex ?? '');
@@ -219,6 +278,7 @@ function Home() {
   const [generatedOnly, setGeneratedOnly] = useState(false);
   const [generatedAddressSearch, setGeneratedAddressSearch] = useState('');
   const [historyPage, setHistoryPage] = useState(0);
+  const [preferencesPersisted, setPreferencesPersisted] = useState(true);
   const [attempts, setAttempts] = useState(0);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [progressPercent, setProgressPercent] = useState<number | null>(null);
@@ -264,6 +324,10 @@ function Home() {
     historyStart,
     historyStart + historyPageSize,
   );
+
+  useEffect(() => {
+    setPreferencesPersisted(saveUserPreferences({ cpuWorkers, format, chain, patternPosition }));
+  }, [cpuWorkers, format, chain, patternPosition]);
 
   useEffect(() => {
     let active = true;
@@ -624,6 +688,11 @@ function Home() {
           <div className="eyebrow">A tool for your own keys</div>
           <h1>Make an address<br />that feels like yours.</h1>
           <p className="intro-copy">Search locally for an address with a pattern you choose. Your keys stay in this browser.</p>
+          <p className="local-preferences-note">
+            {preferencesPersisted
+              ? 'Preferences are saved in this browser. Search patterns and private keys are never included.'
+              : 'Browser storage is unavailable; preferences are not saved.'}
+          </p>
         </section>
 
         <section className="workspace" aria-label="Address search">
@@ -826,6 +895,7 @@ function Home() {
           </div>}
           <div className="progress-track"><div className="progress-fill" style={{ width: `${progressPercent ?? (searching ? 12 : 0)}%` }} /></div>
           <div className="progress-meta"><span>{attempts.toLocaleString()} checked</span><span>{elapsedMs > 0 ? `${Math.round(attempts / (elapsedMs / 1000)).toLocaleString()} keys/sec` : '— keys/sec'}</span></div>
+          <ProcessingVisualizer active={searching} attempts={attempts} />
           {generatedOnly && candidateRecords.length > 0 && (
             <section className="history-section" aria-label="Generated addresses" data-testid="section-candidate-history">
               <div className="history-heading">

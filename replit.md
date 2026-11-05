@@ -26,7 +26,9 @@ _Populate as you build — short repo map plus pointers to the source-of-truth f
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- Address generation and matching run client-side in module Web Workers; the main thread only coordinates work and updates the UI.
+- WebGPU and WebGL are optional renderers for the activity visualization only. They never receive keys or perform address derivation; Canvas 2D is the fallback.
+- Browser persistence is limited to interface preferences. Search patterns, private-key results, and generated candidate rows are not stored in local storage.
 
 ## Product
 
