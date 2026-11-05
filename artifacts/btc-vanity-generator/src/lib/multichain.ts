@@ -24,7 +24,8 @@ export const CHAIN_RPC_URLS: Record<Exclude<MultiChainName, 'btc'>, string> = {
   polygon: 'https://polygon-bor-rpc.publicnode.com',
 };
 
-export const EVM_ADDRESSES_PER_REQUEST = 100;
+// ── Batch & Chunk Settings ──────────────────────────────────────────────────
+export const EVM_ADDRESSES_PER_REQUEST = 100; // Limit mzyan l kol batch bach n-evitiw HTTP 429
 const EVM_RPC_MAX_ATTEMPTS = 6;
 const EVM_RPC_MAX_RETRY_DELAY_MS = 60_000;
 
@@ -123,7 +124,6 @@ export function getMultiChainAddress(privateKeyHex: string, chain: MultiChainNam
   return publicKeyToEvmAddress(publicKey);
 }
 
-// الدالة الجديدة اللي كنستعملوها فـ الـ Workers
 export function deriveAddressFromPrivateKey(privateKey: Uint8Array, chain: MultiChainName): string {
   const privateKeyHex = bytesToHex(privateKey);
   return getMultiChainAddress(privateKeyHex, chain);
@@ -179,6 +179,16 @@ export type EvmTokenBalance = {
   balanceEth: string;
 };
 
+// ── Helper l taqsim l-addresses l batches (Chunks) ──────────────────────────
+export function chunkArray<T>(items: T[], chunkSize: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += chunkSize) {
+    chunks.push(items.slice(i, i + chunkSize));
+  }
+  return chunks;
+}
+
+// ── Batch Fetcher l addresses wahda wahda (Single RPC Batch Request) ────────
 export async function fetchEvmBalanceBatch(
   chain: Exclude<MultiChainName, 'btc'>,
   addresses: string[],
@@ -273,4 +283,25 @@ export async function fetchEvmBalanceBatch(
   }
 
   return results;
+}
+
+// ── Function Jadida: T-checki 3dad kbir dial addresses mtafra b Batches ─────
+export async function fetchAllEvmBalancesInBatches(
+  chain: Exclude<MultiChainName, 'btc'>,
+  allAddresses: string[],
+  batchSize: number = EVM_ADDRESSES_PER_REQUEST,
+  signal?: AbortSignal
+): Promise<EvmTokenBalance[]> {
+  const batches = chunkArray(allAddresses, batchSize);
+  const allResults: EvmTokenBalance[] = [];
+
+  for (const batch of batches) {
+    if (signal?.aborted) {
+      throw new DOMException('The request was cancelled.', 'AbortError');
+    }
+    const batchResults = await fetchEvmBalanceBatch(chain, batch, signal);
+    allResults.push(...batchResults);
+  }
+
+  return allResults;
 }
