@@ -7,7 +7,6 @@ import {
 } from "./bitcoin";
 import {
   deriveAddressFromPrivateKey,
-  matchesEvmVanityPattern,
 } from "./multichain";
 
 const worker = self as unknown as {
@@ -49,7 +48,7 @@ worker.onmessage = (event) => {
       const targetAddress = (options.targetAddress ?? "").trim();
       const chain = options.chain ?? "btc";
       const format = options.format ?? "legacy";
-      const BATCH_SIZE = 10000; // دفعات سريعة
+      const BATCH_SIZE = 10000;
       let lastReportAt = 0;
 
       while (!stopRequested && cursor <= end) {
@@ -61,18 +60,20 @@ worker.onmessage = (event) => {
 
           attempts += 1;
 
+          // ⚡ التصحيح هنا: مقارنة مباشرة وصحيحة لعنوان EVM أو Bitcoin
           const isMatch = chain !== "btc"
-            ? matchesEvmVanityPattern(address, "", "") && address.toLowerCase() === targetAddress.toLowerCase()
+            ? address.toLowerCase() === targetAddress.toLowerCase()
             : address === targetAddress;
 
           if (isMatch) {
-            const result = deriveBitcoinAddress(key, format);
+            const result = chain === "btc" ? deriveBitcoinAddress(key, format) : null;
             worker.postMessage({
               type: "found",
               attempts,
               elapsedMs: Math.max(1, performance.now() - startedAt),
               result: {
-                ...result,
+                privateKeyHex: cursor.toString(16).padStart(64, "0"),
+                privateKeyWif: result?.privateKeyWif ?? "",
                 address,
                 index: cursor.toString(),
               },
