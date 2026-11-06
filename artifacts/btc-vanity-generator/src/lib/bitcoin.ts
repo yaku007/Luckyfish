@@ -51,7 +51,7 @@ export function privateKeyToHex(privateKey: Uint8Array): string {
   return Array.from(privateKey, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-// 🔑 Exported bash finder.worker.ts maytihch f error
+// 🔑 Required by finder.worker.ts
 export function privateKeyFromRangeValue(value: bigint): Uint8Array {
   if (value < 1n || value >= PRIVATE_KEY_LIMIT) {
     throw new Error("Range contains a private key outside the valid secp256k1 range.");
@@ -76,6 +76,26 @@ function base58Encode(value: Uint8Array): string {
     result = `1${result}`;
   }
   return result || "1";
+}
+
+function base58Decode(value: string): Uint8Array | null {
+  let number = 0n;
+  for (const character of value) {
+    const digit = BASE58_ALPHABET.indexOf(character);
+    if (digit < 0) return null;
+    number = number * 58n + BigInt(digit);
+  }
+  const bytes: number[] = [];
+  while (number > 0n) {
+    bytes.unshift(Number(number & 0xffn));
+    number >>= 8n;
+  }
+  let leadingZeroes = 0;
+  for (const character of value) {
+    if (character !== "1") break;
+    leadingZeroes += 1;
+  }
+  return Uint8Array.from([...new Array(leadingZeroes).fill(0), ...bytes]);
 }
 
 export function base58Check(value: Uint8Array): string {
@@ -150,6 +170,63 @@ export function segwitAddress(witnessProgram: Uint8Array): string {
     (polymod >>> (5 * (5 - index))) & 31,
   );
   return `${hrp}1${[...data, ...checksum].map((value) => BECH32_ALPHABET[value]).join("")}`;
+}
+
+// 🔑 Required by bitcoin-balance.tsx
+export function isValidMainnetBitcoinAddress(value: string): boolean {
+  const address = value.trim();
+  if (address.length < 14 || address.length > 90) return false;
+  if (/^bc1/i.test(address)) {
+    if (address !== address.toLowerCase() && address !== address.toUpperCase()) {
+      return false;
+    }
+    const normalized = address.toLowerCase();
+    const separator = normalized.lastIndexOf("1");
+    if (
+      separator < 1 ||
+      separator + 7 > normalized.length ||
+      normalized.slice(0, separator) !== "bc"
+    ) {
+      return false;
+    }
+    const data = Array.from(normalized.slice(separator + 1), (character) =>
+      BECH32_ALPHABET.indexOf(character),
+    );
+    if (data.length < 7 || data.some((value) => value < 0)) return false;
+    const version = data[0];
+    if (version > 16) return false;
+    const expandedHrp = [
+      ...Array.from("bc", (character) => character.charCodeAt(0) >> 5),
+      0,
+      ...Array.from("bc", (character) => character.charCodeAt(0) & 31),
+    ];
+    const expectedChecksum = version === 0 ? 1 : 0x2bc830a3;
+    if (bech32Polymod([...expandedHrp, ...data]) !== expectedChecksum) {
+      return false;
+    }
+    try {
+      const witnessProgram = convertBits(
+        Uint8Array.from(data.slice(1, -6)),
+        5,
+        8,
+        false,
+      );
+      if (version === 0) {
+        return witnessProgram.length === 20 || witnessProgram.length === 32;
+      }
+      if (version === 1) return witnessProgram.length === 32;
+      return witnessProgram.length >= 2 && witnessProgram.length <= 40;
+    } catch {
+      return false;
+    }
+  }
+  const decoded = base58Decode(address);
+  if (!decoded || decoded.length !== 25 || (decoded[0] !== 0x00 && decoded[0] !== 0x05)) {
+    return false;
+  }
+  const payload = decoded.slice(0, 21);
+  const checksum = sha256(sha256(payload)).slice(0, 4);
+  return checksum.every((byte, index) => byte === decoded[21 + index]);
 }
 
 export function deriveBitcoinAddress(
