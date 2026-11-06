@@ -229,6 +229,14 @@ export function isValidMainnetBitcoinAddress(value: string): boolean {
   return checksum.every((byte, index) => byte === decoded[21 + index]);
 }
 
+export function isValidBitcoinAddressTarget(value: string, format: AddressFormat): boolean {
+  const address = value.trim();
+  if (!isValidMainnetBitcoinAddress(address)) return false;
+  return format === "legacy"
+    ? address.startsWith("1")
+    : /^bc1q/i.test(address) && address.length === 42;
+}
+
 export function deriveBitcoinAddress(
   privateKey: Uint8Array,
   format: AddressFormat,
