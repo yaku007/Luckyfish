@@ -1,6 +1,7 @@
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { ripemd160 } from "@noble/hashes/legacy.js";
 import { sha256 } from "@noble/hashes/sha2.js";
+import { HDKey } from "@scure/bip32";
 
 export type AddressFormat = "legacy" | "segwit";
 
@@ -49,14 +50,6 @@ export function randomPrivateKey(): Uint8Array {
 
 export function privateKeyToHex(privateKey: Uint8Array): string {
   return Array.from(privateKey, (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-// 🔑 Required by finder.worker.ts
-export function privateKeyFromRangeValue(value: bigint): Uint8Array {
-  if (value < 1n || value >= PRIVATE_KEY_LIMIT) {
-    throw new Error("Range contains a private key outside the valid secp256k1 range.");
-  }
-  return bigIntToBytes(value);
 }
 
 function hash160(value: Uint8Array): Uint8Array {
@@ -117,6 +110,12 @@ function getPublicKeyHash(privateKey: Uint8Array): Uint8Array {
   return hash160(secp256k1.getPublicKey(privateKey, true));
 }
 
+function addressFromPublicKeyHash(publicKeyHash: Uint8Array, format: AddressFormat): string {
+  return format === "legacy"
+    ? base58Check(Uint8Array.of(0x00, ...publicKeyHash))
+    : segwitAddress(publicKeyHash);
+}
+
 function convertBits(data: Uint8Array, fromBits: number, toBits: number, pad: boolean): number[] {
   let accumulator = 0;
   let bits = 0;
@@ -172,7 +171,46 @@ export function segwitAddress(witnessProgram: Uint8Array): string {
   return `${hrp}1${[...data, ...checksum].map((value) => BECH32_ALPHABET[value]).join("")}`;
 }
 
-// 🔑 Required by bitcoin-balance.tsx
+// --- Validations ---
+
+export function isValidBitcoinAddressTarget(value: string, format: AddressFormat): boolean {
+  const normalized = value.trim();
+  if (format === "legacy") {
+    const decoded = base58Decode(normalized);
+    if (!decoded || decoded.length !== 25 || decoded[0] !== 0x00) return false;
+    const payload = decoded.slice(0, 21);
+    const checksum = sha256(sha256(payload)).slice(0, 4);
+    return checksum.every((byte, index) => byte === decoded[21 + index]);
+  }
+  if (
+    normalized.length !== 42 ||
+    normalized !== normalized.toLowerCase() ||
+    !normalized.startsWith("bc1q")
+  ) {
+    return false;
+  }
+  const separator = normalized.lastIndexOf("1");
+  const hrp = normalized.slice(0, separator);
+  const encoded = normalized.slice(separator + 1);
+  const data = Array.from(encoded, (character) => BECH32_ALPHABET.indexOf(character));
+  if (data.some((value) => value < 0)) return false;
+  const expandedHrp = [
+    ...Array.from(hrp, (character) => character.charCodeAt(0) >> 5),
+    0,
+    ...Array.from(hrp, (character) => character.charCodeAt(0) & 31),
+  ];
+  try {
+    return (
+      hrp === "bc" &&
+      data[0] === 0 &&
+      bech32Polymod([...expandedHrp, ...data]) === 1 &&
+      convertBits(Uint8Array.from(data.slice(1, -6)), 5, 8, false).length === 20
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function isValidMainnetBitcoinAddress(value: string): boolean {
   const address = value.trim();
   if (address.length < 14 || address.length > 90) return false;
@@ -229,28 +267,18 @@ export function isValidMainnetBitcoinAddress(value: string): boolean {
   return checksum.every((byte, index) => byte === decoded[21 + index]);
 }
 
-export function isValidBitcoinAddressTarget(value: string, format: AddressFormat): boolean {
-  const address = value.trim();
-  if (!isValidMainnetBitcoinAddress(address)) return false;
-  return format === "legacy"
-    ? address.startsWith("1")
-    : /^bc1q/i.test(address) && address.length === 42;
-}
+// --- Derivations ---
 
 export function deriveBitcoinAddress(
   privateKey: Uint8Array,
   format: AddressFormat,
 ): { address: string; privateKeyWif: string; privateKeyHex: string } {
   const publicKeyHash = getPublicKeyHash(privateKey);
-  const address = format === "legacy"
-    ? base58Check(Uint8Array.of(0x00, ...publicKeyHash))
-    : segwitAddress(publicKeyHash);
-
+  const address = addressFromPublicKeyHash(publicKeyHash, format);
   const wifPayload = new Uint8Array(34);
   wifPayload[0] = 0x80;
   wifPayload.set(privateKey, 1);
   wifPayload[33] = 0x01;
-
   return {
     address,
     privateKeyWif: base58Check(wifPayload),
@@ -262,8 +290,141 @@ export function deriveBitcoinAddressOnly(
   privateKey: Uint8Array,
   format: AddressFormat,
 ): string {
-  const publicKeyHash = getPublicKeyHash(privateKey);
-  return format === "legacy"
-    ? base58Check(Uint8Array.of(0x00, ...publicKeyHash))
-    : segwitAddress(publicKeyHash);
+  return addressFromPublicKeyHash(getPublicKeyHash(privateKey), format);
+}
+
+export function privateKeyFromRangeValue(value: bigint): Uint8Array {
+  if (value < 1n || value >= PRIVATE_KEY_LIMIT) {
+    throw new Error("Range contains a private key outside the valid secp256k1 range.");
+  }
+  return bigIntToBytes(value);
+}
+
+// --- Search Range (Brute Force) ---
+
+export async function searchRange(
+  startHex: string,
+  endHex: string,
+  targetAddress: string,
+  format: AddressFormat = "legacy",
+  onProgress?: (currentKey: bigint, speed: number) => void,
+  onFound?: (result: { privateKeyHex: string; privateKeyWif: string; address: string }) => void
+): Promise<boolean> {
+  const start = BigInt(`0x${startHex}`);
+  const end = BigInt(`0x${endHex}`);
+
+  if (start < 1n) throw new Error("Start key must be at least 1");
+  if (end >= PRIVATE_KEY_LIMIT) throw new Error("End key exceeds secp256k1 limit");
+  if (start > end) throw new Error("Start key must be less than or equal to end key");
+
+  let current = start;
+  let iterations = 0;
+  const startTime = performance.now();
+
+  while (current <= end) {
+    const privateKeyBytes = privateKeyFromRangeValue(current);
+    const result = deriveBitcoinAddress(privateKeyBytes, format);
+
+    if (result.address === targetAddress) {
+      if (onFound) {
+        onFound({
+          privateKeyHex: result.privateKeyHex,
+          privateKeyWif: result.privateKeyWif,
+          address: result.address
+        });
+      }
+      return true;
+    }
+
+    iterations++;
+
+    if (onProgress && iterations % 2000 === 0) {
+      const elapsed = (performance.now() - startTime) / 1000;
+      const speed = Math.floor(iterations / elapsed);
+      onProgress(current, speed);
+    }
+
+    current += 1n;
+
+    if (iterations % 2000 === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  }
+  return false;
+}
+
+// --- Search HD Addresses (BIP32) ---
+
+export async function searchHDAddresses(
+  masterKeyOrXpub: string,
+  startIndex: number,
+  endIndex: number,
+  targetAddress: string,
+  format: AddressFormat = "legacy",
+  onProgress?: (index: number, currentAddress: string, speed: number) => void,
+  onFound?: (result: { index: number; address: string; privateKeyWif?: string; privateKeyHex?: string }) => void
+): Promise<boolean> {
+  let master: HDKey;
+  try {
+    master = HDKey.fromExtendedKey(masterKeyOrXpub);
+  } catch (e) {
+    throw new Error("Invalid HD Key format (xpub or xprv expected).");
+  }
+
+  if (startIndex < 0 || endIndex < startIndex) {
+    throw new Error("Invalid index range.");
+  }
+
+  let iterations = 0;
+  const startTime = performance.now();
+
+  for (let index = startIndex; index <= endIndex; index++) {
+    const child = master.derive(`m/0/0/${index}`);
+
+    let address: string;
+    let wif: string | undefined;
+    let hex: string | undefined;
+
+    if (format === "legacy") {
+      const pubHash = hash160(child.publicKey!);
+      address = base58Check(Uint8Array.of(0x00, ...pubHash));
+    } else {
+      const pubHash = hash160(child.publicKey!);
+      address = segwitAddress(pubHash);
+    }
+
+    if (address === targetAddress) {
+      if (child.privateKey) {
+        const wifPayload = new Uint8Array(34);
+        wifPayload[0] = 0x80;
+        wifPayload.set(child.privateKey, 1);
+        wifPayload[33] = 0x01;
+        wif = base58Check(wifPayload);
+        hex = privateKeyToHex(child.privateKey);
+      }
+
+      if (onFound) {
+        onFound({
+          index,
+          address,
+          privateKeyWif: wif,
+          privateKeyHex: hex,
+        });
+      }
+      return true;
+    }
+
+    iterations++;
+
+    if (onProgress && iterations % 1000 === 0) {
+      const elapsed = (performance.now() - startTime) / 1000;
+      const speed = Math.floor(iterations / elapsed);
+      onProgress(index, address, speed);
+    }
+
+    if (iterations % 1000 === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  }
+  return false;
 }
