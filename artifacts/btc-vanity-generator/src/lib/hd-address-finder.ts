@@ -107,6 +107,8 @@ export async function findHdAddressByXpub({
 
   const startedAt = performance.now();
   let checked = 0;
+  const BATCH_SIZE = 500; // ⚡ Batch size kbir bach n-rfeɛo s-sorɛa (Keys/second)
+
   for (let index = startIndex; index <= endIndex; index += 1) {
     if (signal?.aborted) throw new Error('Search stopped.');
 
@@ -124,24 +126,24 @@ export async function findHdAddressByXpub({
     const address = chain === 'btc'
       ? legacyAddressFromPublicKey(child.publicKey)
       : publicKeyToEvmAddress(child.publicKey);
+    
     if (address === normalizedTarget) {
       return { index, address };
     }
 
     checked += 1;
-    if (onProgress && checked % 100 === 0) {
+
+    // Report progress and yield b t-nriqateyrya l-m-optimize bach t-zyd s-sorɛa
+    if (onProgress && (checked % BATCH_SIZE === 0 || index === endIndex)) {
       const elapsedSeconds = Math.max((performance.now() - startedAt) / 1000, 0.001);
       onProgress({
         index,
         address,
         keysPerSecond: Math.floor(checked / elapsedSeconds),
       });
-    }
-
-    if (checked % 1_000 === 0) {
       await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
     }
   }
 
   return null;
-    }
+}
