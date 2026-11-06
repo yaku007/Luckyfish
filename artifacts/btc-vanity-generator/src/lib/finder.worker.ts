@@ -1,130 +1,83 @@
 /// <reference lib="webworker" />
 
-import {
-  deriveBitcoinAddress,
+import { 
+  deriveBitcoinAddress, 
   deriveBitcoinAddressOnly,
-  privateKeyFromRangeValue,
-} from "./bitcoin";
-import {
-  deriveAddressFromPrivateKey,
-} from "./multichain";
+  privateKeyFromRangeValue 
+} from './bitcoin';
+import { secp256k1 } from "@noble/curves/secp256k1.js";
+import { keccak_256 } from "@noble/hashes/sha3.js";
 
-const worker = self as unknown as {
-  onmessage: ((event: MessageEvent<any>) => void) | null;
-  postMessage: (message: any) => void;
-};
+// دالة توليد عناوين EVM (ETH, BNB, Polygon...)
+function privateKeyToEvmAddress(privateKey: Uint8Array): string {
+  const pubKey = secp256k1.getPublicKey(privateKey, false); // Uncompressed
+  const pubKeyNoPrefix = pubKey.slice(1);
+  const hash = keccak_256(pubKeyNoPrefix);
+  const addressBytes = hash.slice(-20);
+  const hex = Array.from(addressBytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  return `0x${hex}`;
+}
 
-let stopRequested = false;
-let running = false;
-
-worker.onmessage = (event) => {
-  if (event.data.type === "stop") {
-    stopRequested = true;
-    return;
-  }
-  if (running) return;
-
-  const options = event.data;
+self.onmessage = async (event) => {
+  const { startHex, endHex, targetAddress, chain = 'btc', format = 'legacy' } = event.data;
+  const normalizedTarget = (targetAddress ?? '').trim();
+  let current = BigInt(`0x${startHex}`);
+  const end = BigInt(`0x${endHex}`);
   const startedAt = performance.now();
-  stopRequested = false;
-  running = true;
+  let attempts = 0;
 
-  void (async () => {
-    let attempts = 0;
-
+  for (let i = current; i <= end; i++) {
     try {
-      const startHex = options.startHex ?? "1";
-      const endHex = options.endHex ?? "FFFFF";
-      
-      const start = BigInt(`0x${startHex.trim().replace(/^0x/i, "")}`);
-      const end = BigInt(`0x${endHex.trim().replace(/^0x/i, "")}`);
-      
-      if (start > end) {
-        throw new Error("Start range must be less than or equal to End range.");
-      }
+      const key = privateKeyFromRangeValue(i);
+      let address = '';
 
-      let cursor = start;
-      const rangeSize = end - start + 1n;
-      const targetAddress = (options.targetAddress ?? "").trim();
-      const chain = options.chain ?? "btc";
-      const format = options.format ?? "legacy";
-      const BATCH_SIZE = 10000;
-      let lastReportAt = 0;
-
-      while (!stopRequested && cursor <= end) {
-        for (let i = 0; i < BATCH_SIZE && cursor <= end && !stopRequested; i++) {
-          const key = privateKeyFromRangeValue(cursor);
-          const address = chain !== "btc"
-            ? deriveAddressFromPrivateKey(key, chain)
-            : deriveBitcoinAddressOnly(key, format);
-
-          attempts += 1;
-
-          // ⚡ التصحيح هنا: مقارنة مباشرة وصحيحة لعنوان EVM أو Bitcoin
-          const isMatch = chain !== "btc"
-            ? address.toLowerCase() === targetAddress.toLowerCase()
-            : address === targetAddress;
-
-          if (isMatch) {
-            const result = chain === "btc" ? deriveBitcoinAddress(key, format) : null;
-            worker.postMessage({
-              type: "found",
-              attempts,
-              elapsedMs: Math.max(1, performance.now() - startedAt),
-              result: {
-                privateKeyHex: cursor.toString(16).padStart(64, "0"),
-                privateKeyWif: result?.privateKeyWif ?? "",
-                address,
-                index: cursor.toString(),
-              },
-            });
-            return;
-          }
-
-          cursor += 1n;
-        }
-
-        const now = performance.now();
-        if (now - lastReportAt >= 200) {
-          const elapsedMs = Math.max(1, now - startedAt);
-          const speed = Math.floor((attempts / elapsedMs) * 1000);
-          const percent = Number(((cursor - start) * 10000n) / rangeSize) / 100;
-
-          worker.postMessage({
-            type: "progress",
-            attempts,
-            elapsedMs,
-            speed,
-            index: cursor.toString(),
-            currentKeyHex: cursor.toString(16),
-            percent,
-          });
-          lastReportAt = now;
-        }
-
-        await new Promise<void>((resolve) => setTimeout(resolve, 0));
-      }
-
-      if (cursor > end) {
-        worker.postMessage({
-          type: "exhausted",
-          attempts,
-          elapsedMs: Math.max(1, performance.now() - startedAt),
-        });
+      // التحقق واش الشبكة Bitcoin ولا EVM
+      if (chain === 'btc') {
+        address = deriveBitcoinAddressOnly(key, format);
       } else {
-        worker.postMessage({
-          type: "stopped",
-          attempts,
-          elapsedMs: Math.max(1, performance.now() - startedAt),
-        });
+        address = privateKeyToEvmAddress(key);
       }
-    } catch (error) {
-      worker.postMessage({
-        type: "error",
-        message: error instanceof Error ? error.message : "Search failed.",
-      });
-    } finally {
-      running = false;
+
+      const isMatch = chain === 'btc'
+        ? address === normalizedTarget
+        : address.toLowerCase() === normalizedTarget.toLowerCase();
+
+      if (isMatch) {
+        let privateKeyWif = '';
+        let privateKeyHex = i.toString(16).padStart(64, '0');
+
+        if (chain === 'btc') {
+          const result = deriveBitcoinAddress(key, format);
+          privateKeyWif = result.privateKeyWif;
+          privateKeyHex = result.privateKeyHex;
+        }
+
+        self.postMessage({ 
+          type: 'found', 
+          result: { 
+            index: i.toString(), 
+            address, 
+            privateKeyHex, 
+            privateKeyWif 
+          } 
+        });
+        return;
+      }
+
+      attempts++;
+      if (attempts % 5000 === 0) {
+        const elapsedSeconds = Math.max((performance.now() - startedAt) / 1000, 0.001);
+        self.postMessage({
+          type: 'progress',
+          index: i.toString(),
+          address,
+          keysPerSecond: Math.floor(attempts / elapsedSeconds),
+        });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    } catch (e) {
+      // ignore individual errors
     }
-  })();
+  }
+  self.postMessage({ type: 'exhausted' });
 };
