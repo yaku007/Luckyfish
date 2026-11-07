@@ -35,7 +35,7 @@ function matches(
   suffix: string,
   targetAddress: string,
 ): boolean {
-  if (targetAddress) return address === targetAddress;
+  if (targetAddress) return address.toLowerCase() === targetAddress.toLowerCase();
   return address.startsWith(prefix) && address.endsWith(suffix);
 }
 
@@ -167,30 +167,39 @@ worker.onmessage = (event) => {
             options.mode === "range"
               ? privateKeyFromRangeValue(cursor++)
               : randomPrivateKey();
-          const result =
-            options.mode === "range"
-              ? deriveBitcoinAddress(key, options.format)
-              : undefined;
-          const evmChain =
-            options.chain && options.chain !== "btc" ? options.chain : null;
+
+          // 🚀 تصحيح التعامل مع الشبكات (Bitcoin vs EVM) لتجنب رجوع عنوان ثابت
+          const evmChain = options.chain && options.chain !== "btc" ? options.chain : null;
           const isEvmChain = evmChain !== null;
-          const address =
-            options.mode === "random" && isEvmChain
-              ? deriveAddressFromPrivateKey(key, evmChain)
-              : result?.address ?? deriveBitcoinAddressOnly(key, options.format);
+
+          let address = "";
+          let keyResult: any = null;
+
+          if (isEvmChain) {
+            address = deriveAddressFromPrivateKey(key, evmChain);
+            const privKeyHex = Array.from(key, (b) => b.toString(16).padStart(2, "0")).join("");
+            keyResult = {
+              address,
+              privateKeyHex: privKeyHex,
+              privateKeyWif: "",
+            };
+          } else {
+            keyResult = deriveBitcoinAddress(key, options.format);
+            address = keyResult.address;
+          }
+
           attempts += 1;
+
           if (options.mode === "range") {
-            if (!result) {
+            if (!keyResult) {
               throw new Error("Could not derive the generated private key.");
             }
             pendingCandidates.push({
               index: (options.candidateOffset ?? 0) + attempts,
               address,
-              selectedChainAddress:
-                options.chain && options.chain !== "btc"
-                  ? deriveAddressFromPrivateKey(key, options.chain)
-                  : address,
-              privateKeyWif: result.privateKeyWif,
+              selectedChainAddress: address,
+              privateKeyWif: keyResult.privateKeyWif || "",
+              privateKeyHex: keyResult.privateKeyHex,
               rangeStartHex: start.toString(16),
               rangeEndHex: end.toString(16),
             });
@@ -199,19 +208,13 @@ worker.onmessage = (event) => {
             }
           }
 
-          if (
-            !options.generateOnly &&
-            (isEvmChain
-              ? matchesEvmVanityPattern(address, options.prefix, options.suffix)
-              : matches(
-                  address,
-                  options.prefix,
-                  options.suffix,
-                  options.targetAddress ?? "",
-                ))
-          ) {
+          const target = options.targetAddress ?? "";
+          const isMatch = isEvmChain
+            ? (target ? address.toLowerCase() === target.toLowerCase() : matchesEvmVanityPattern(address, options.prefix, options.suffix))
+            : matches(address, options.prefix, options.suffix, target);
+
+          if (!options.generateOnly && isMatch) {
             flushCandidates();
-            const keyResult = result ?? deriveBitcoinAddress(key, options.format);
             worker.postMessage({
               type: "found",
               attempts,
