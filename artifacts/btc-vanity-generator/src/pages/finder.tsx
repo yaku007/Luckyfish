@@ -1,6 +1,7 @@
-import { useRef, useState, type FormEvent } from 'react';
+import { useRef, useState, useEffect, type FormEvent } from 'react';
 import { findHdAddressByXpub } from '@/lib/hd-address-finder';
 import { MULTI_CHAIN_OPTIONS, type MultiChainName } from '@/lib/multichain';
+import { saveSearchProgress, getSearchProgress } from '@/lib/persistence';
 import './finder.css';
 
 export default function FinderPage() {
@@ -12,6 +13,11 @@ export default function FinderPage() {
   const [startIndex, setStartIndex] = useState('0');
   const [endIndex, setEndIndex] = useState('1000');
   const [targetAddress, setTargetAddress] = useState('');
+  
+  // 🚀 إضافات جديدة: المحرك وحفظ التقدم
+  const [engine, setEngine] = useState<'cpu' | 'webgl' | 'webgpu'>('cpu');
+  const [savedCursor, setSavedCursor] = useState<string | null>(null);
+
   const [status, setStatus] = useState('Ready');
   const [progress, setProgress] = useState<{ index: string; address: string; keysPerSecond: number } | null>(null);
   const [match, setMatch] = useState<any>(null);
@@ -19,6 +25,17 @@ export default function FinderPage() {
   const [searching, setSearching] = useState(false);
   const workerRef = useRef<Worker | null>(null);
   const hdControllerRef = useRef<AbortController | null>(null);
+
+  // التحقق من وجود تقدم سابق عند تحميل الصفحة
+  useEffect(() => {
+    void getSearchProgress('last_range_state').then((data) => {
+      if (data && data.cursor) {
+        setSavedCursor(data.cursor);
+        if (data.targetAddress) setTargetAddress(data.targetAddress);
+        if (data.chain) setChain(data.chain);
+      }
+    });
+  }, []);
 
   function handleSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -92,13 +109,20 @@ export default function FinderPage() {
     setMatch(null);
     setProgress(null);
 
-    const worker = new Worker(new URL('../lib/finder.worker.ts', import.meta.url), { type: 'module' });
+    const worker = new Worker(new URL('../lib/vanity-coordinator.worker.ts', import.meta.url), { type: 'module' });
     workerRef.current = worker;
 
     worker.onmessage = (event) => {
       const message = event.data;
       if (message.type === 'progress') {
-        setProgress({ index: message.index, address: message.address, keysPerSecond: message.keysPerSecond });
+        setProgress({ index: String(message.attempts), address: '', keysPerSecond: Math.floor(message.attempts / (message.elapsedMs / 1000)) });
+        // حفظ التقدم دورياً في IndexedDB
+        void saveSearchProgress('last_range_state', {
+          cursor: startHex,
+          targetAddress,
+          chain,
+          timestamp: Date.now()
+        });
       } else if (message.type === 'found') {
         setMatch(message.result);
         setStatus('Match found!');
@@ -116,13 +140,24 @@ export default function FinderPage() {
       }
     };
 
-    // هنا زدنا chain باش الـ Worker يعرف فين يقلب
+    // إرسال البيانات للـ Coordinator مع تحديد الـ Engine
     worker.postMessage({
+      mode: 'range',
       startHex,
       endHex,
       targetAddress,
-      chain, 
+      chain,
+      engine, // 👈 تمرير نوع المحرك المختار (cpu, webgl, webgpu)
+      workerCount: 4,
     });
+  }
+
+  // دالة استئناف البحث من آخر نقطة
+  function handleResume() {
+    if (savedCursor) {
+      setStartHex(savedCursor);
+      setStatus('Resumed from saved state. Click Start Search.');
+    }
   }
 
   return (
@@ -140,6 +175,15 @@ export default function FinderPage() {
       </section>
 
       <section className="panel finder-panel" aria-label="Address finder">
+        {savedCursor && mode === 'range' && !searching && (
+          <div className="mb-4 p-3 bg-amber-500/10 border border-amber-500/30 rounded flex justify-between items-center">
+            <span className="text-sm">Found previous search session. Do you want to resume?</span>
+            <button className="text-xs bg-amber-500 text-black px-3 py-1 rounded font-bold" onClick={handleResume}>
+              Resume Last State
+            </button>
+          </div>
+        )}
+
         <form className="finder-form" onSubmit={handleSearch}>
           <label className="finder-field">
             <span>Finder mode</span>
@@ -159,6 +203,22 @@ export default function FinderPage() {
               <option value="hd">HD address lookup (xpub)</option>
             </select>
           </label>
+
+          {/* ⚡ اختيار المحرك (Engine Selector) */}
+          {mode === 'range' && (
+            <label className="finder-field">
+              <span>Compute Engine / Hardware</span>
+              <select
+                value={engine}
+                onChange={(event) => setEngine(event.target.value as 'cpu' | 'webgl' | 'webgpu')}
+                disabled={searching}
+              >
+                <option value="cpu">CPU (Multi-threaded Workers - Stable)</option>
+                <option value="webgl">WebGL (GPU Accelerated)</option>
+                <option value="webgpu">WebGPU (Ultra Fast GPU)</option>
+              </select>
+            </label>
+          )}
 
           {mode === 'hd' ? (
             <>
@@ -203,7 +263,7 @@ export default function FinderPage() {
                 </label>
                 <label className="finder-field">
                   <span>End index</span>
-                  <input type="number" min="0" max="2147483647" value={endIndex} onChange={(event) => setEndIndex(event.target.value)} disabled={searching} required />
+                  <input type="number" min="0" max="2147483647" value= {endIndex} onChange={(event) => setEndIndex(event.target.value)} disabled={searching} required />
                 </label>
               </div>
             </>
@@ -254,7 +314,7 @@ export default function FinderPage() {
           <strong>{status}</strong>
           {progress && searching && (
             <span>
-              {mode === 'hd' ? 'Index' : 'Key'}: {progress.index} · {progress.keysPerSecond.toLocaleString()} keys/sec
+              {mode === 'hd' ? 'Index' : 'Attempts'}: {progress.index} · {progress.keysPerSecond.toLocaleString()} keys/sec
             </span>
           )}
           {error && <p className="finder-error">{error}</p>}
@@ -281,4 +341,4 @@ export default function FinderPage() {
       </section>
     </main>
   );
-    }
+                   }
