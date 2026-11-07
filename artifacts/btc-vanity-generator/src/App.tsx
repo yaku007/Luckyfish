@@ -20,24 +20,14 @@ import FinderPage from '@/pages/finder';
 import SelfTestPage from '@/pages/self-test';
 import { queueBalanceCheck } from '@/lib/balance-check-transfer';
 import { rememberGeneratedAddressRanges } from '@/lib/range-lookup-index';
+import { saveSearchProgress, getSearchProgress } from '@/lib/storage';
 import {
-  ArrowUpRight,
   Bitcoin,
-  Check,
   ChevronDown,
   CircleAlert,
   Copy,
-  Cpu,
   Download,
   Eye,
-  Fingerprint,
-  Globe2,
-  KeyRound,
-  LockKeyhole,
-  RotateCw,
-  Search,
-  ShieldCheck,
-  SlidersHorizontal,
   Sparkles,
 } from 'lucide-react';
 import {
@@ -202,6 +192,9 @@ function Home() {
   const [patternPosition, setPatternPosition] = useState<'prefix' | 'suffix'>('prefix');
   const [format, setFormat] = useState<AddressFormat>(() => initialResume?.format ?? 'legacy');
   const [chain, setChain] = useState<MultiChainName>('btc');
+  
+  // اختيار المحرك (CPU, WebGL, WebGPU)
+  const [computeEngine, setComputeEngine] = useState<'cpu' | 'webgl' | 'webgpu'>('cpu');
 
   const [rangeStart, setRangeStart] = useState(() => initialResume?.startHex ?? '');
   const [rangeEnd, setRangeEnd] = useState(() => initialResume?.endHex ?? '');
@@ -209,7 +202,6 @@ function Home() {
   const [continuationBatchSize, setContinuationBatchSize] = useState(() => initialResume?.batchSize ?? '');
   const [canContinueRange, setCanContinueRange] = useState(Boolean(initialResume));
   const [rangeAccepted, setRangeAccepted] = useState(Boolean(initialResume));
-  const [autoContinueRange, setAutoContinueRange] = useState(false);
   const [autoResumeEnabled, setAutoResumeEnabled] = useState(Boolean(initialResume));
   const [autoResumePending, setAutoResumePending] = useState(Boolean(initialResume));
   const [notice, setNotice] = useState('');
@@ -226,8 +218,8 @@ function Home() {
   const [price, setPrice] = useState<number | null>(null);
   const [priceChange, setPriceChange] = useState<number | null>(null);
   const [priceState, setPriceState] = useState<'loading' | 'ready' | 'error'>('loading');
-  const [multiChainKey, setMultiChainKey] = useState('');
-  const [multiChainChain, setMultiChainChain] = useState<MultiChainName>('eth');
+  const [multiChainKey] = useState('');
+  const [multiChainChain] = useState<MultiChainName>('eth');
 
   const formRef = useRef<HTMLFormElement>(null);
   const workerRef = useRef<Worker | null>(null);
@@ -293,11 +285,6 @@ function Home() {
       }
       workerRef.current = null;
   }, []);
-
-  const copyTarget = async () => {
-    if (!target) return;
-    try { await navigator.clipboard.writeText(target); setNotice('Search target copied.'); } catch { setNotice('Clipboard access is unavailable in this browser.'); }
-  };
 
   const copyValue = async (value: string, label: string) => {
     try { await navigator.clipboard.writeText(value); setNotice(`${label} copied to clipboard.`); } catch { setNotice('Clipboard access is unavailable in this browser.'); }
@@ -497,6 +484,13 @@ function Home() {
             ...previous,
             ...candidates,
           ].sort((left, right) => left.index - right.index));
+
+          // حفظ التقدم عبر IndexedDB
+          void saveSearchProgress('last_range_state', {
+            cursor: rangeStart,
+            chain,
+            timestamp: Date.now()
+          });
         } else if (message.type === 'progress') {
           setProgressPercent(message.percent);
           setSearchStatus('running');
@@ -595,6 +589,7 @@ function Home() {
         candidateLimit: mode === 'range' ? candidateLimit : undefined,
         candidateOffset: existingRecordCount,
         workerCount: cpuWorkers,
+        engine: computeEngine, // <--- تمرير الـ Engine للـ Worker
       });
     } catch {
       setSearchStatus('error');
@@ -603,7 +598,6 @@ function Home() {
   };
 
   const formattedPrice = price === null ? '—' : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(price);
-  const multiChainAddress = multiChainKey.trim() ? (() => { try { return getMultiChainAddress(multiChainKey, multiChainChain); } catch { return ''; } })() : '';
   const isGeneratingRangeOnly = mode === 'range' && !target.trim() && !exactTarget.trim();
 
   return (
@@ -676,6 +670,43 @@ function Home() {
               )}
             </div>
 
+            {/* Compute Engine Selector (CPU, WebGL, WebGPU) */}
+            {mode === 'range' && (
+              <div className="field-grid">
+                <div>
+                  <label className="field-label">Compute Engine / Hardware</label>
+                  <div className="select-wrap">
+                    <select
+                      className="select-control"
+                      value={computeEngine}
+                      disabled={searching}
+                      onChange={(event) => setComputeEngine(event.target.value as 'cpu' | 'webgl' | 'webgpu')}
+                    >
+                      <option value="cpu">CPU (Multi-threaded Workers - Stable)</option>
+                      <option value="webgl">WebGL (GPU Accelerated)</option>
+                      <option value="webgpu">WebGPU (Ultra Fast GPU)</option>
+                    </select>
+                    <ChevronDown aria-hidden="true" />
+                  </div>
+                </div>
+                <div className="cpu-worker-control">
+                  <label className="field-label" htmlFor="cpu-workers-range">
+                    CPU Workers: <strong>{cpuWorkers}</strong>
+                  </label>
+                  <input
+                    id="cpu-workers-range"
+                    type="range"
+                    min="1"
+                    max={maxCpuWorkers}
+                    value={cpuWorkers}
+                    disabled={searching}
+                    onChange={(event) => setCpuWorkers(Number(event.target.value))}
+                    className="worker-range-slider"
+                  />
+                </div>
+              </div>
+            )}
+
             <label className="field-label" htmlFor="exact-address">
               {chain === 'btc' ? 'Exact full BTC address (optional)' : 'Exact full EVM address matching unavailable'}
             </label>
@@ -722,223 +753,255 @@ function Home() {
                   <ChevronDown aria-hidden="true" />
                 </div>
               </div>
-              <div className="cpu-worker-control">
-                <div className="cpu-worker-heading">
-                  <label className="field-label"><Cpu aria-hidden="true" /> CPU workers</label>
-                  <output>{cpuWorkers} / {maxCpuWorkers} max</output>
-                </div>
-                <input className="cpu-worker-slider" type="range" min={1} max={maxCpuWorkers} step={1} value={cpuWorkers} disabled={searching} onChange={(event) => setCpuWorkers(Number(event.target.value))} />
-              </div>
             </div>
 
             {mode === 'range' && (
-              <>
-                <div className="range-fields">
+              <div className="custom-range-box">
+                <div className="section-kicker">Custom key range</div>
+                <div className="field-grid">
                   <div>
-                    <label className="field-label">Low private-key bound (hex)</label>
-                    <input className="range-input" disabled={searching} value={rangeStart} onChange={(event) => { clearResumePreference(); setRangeStart(event.target.value.replace(/[^0-9a-f]/gi, '').slice(0, 64)); }} placeholder="000000… (start)" />
+                    <label className="field-label" htmlFor="range-start">Start Key (Hex)</label>
+                    <input
+                      id="range-start"
+                      className="target-input"
+                      value={rangeStart}
+                      onChange={(event) => { clearResumePreference(); setRangeStart(event.target.value.trim()); }}
+                      disabled={searching}
+                      placeholder="1"
+                    />
                   </div>
                   <div>
-                    <label className="field-label">High private-key bound (hex)</label>
-                    <input className="range-input" disabled={searching} value={rangeEnd} onChange={(event) => { clearResumePreference(); setRangeEnd(event.target.value.replace(/[^0-9a-f]/gi, '').slice(0, 64)); }} placeholder="000000… (end)" />
+                    <label className="field-label" htmlFor="range-end">End Key (Hex)</label>
+                    <input
+                      id="range-end"
+                      className="target-input"
+                      value={rangeEnd}
+                      onChange={(event) => { clearResumePreference(); setRangeEnd(event.target.value.trim()); }}
+                      disabled={searching}
+                      placeholder="FFFFF"
+                    />
                   </div>
                 </div>
-                <label className="confirm-row">
-                  <input type="checkbox" disabled={searching} checked={rangeAccepted} onChange={(event) => setRangeAccepted(event.target.checked)} />
-                  <span>I understand this scan displays every checked address and full WIF private key here.</span>
-                </label>
-                <label className="confirm-row">
-                  <input
-                    type="checkbox"
-                    checked={autoContinueRange}
-                    onChange={(event) => {
-                      autoContinueRangeRef.current = event.target.checked;
-                      setAutoContinueRange(event.target.checked);
-                    }}
-                  />
-                  <span>Automatically generate the next same-size block when this block finishes.</span>
-                </label>
-                {autoResumeEnabled && <p className="hint" role="status">Automatic restart is enabled for this tab.</p>}
-              </>
+                <div className="range-acceptance">
+                  <label className="checkbox-label">
+                    <input
+                      type="checkbox"
+                      checked={rangeAccepted}
+                      disabled={searching}
+                      onChange={(event) => setRangeAccepted(event.target.checked)}
+                    />
+                    <span>I understand the key space and wish to scan this explicit range.</span>
+                  </label>
+                </div>
+              </div>
             )}
 
-            <button className="primary-button" type="submit" disabled={searchStatus === 'stopping' || (!searching && mode === 'range' && !rangeAccepted)}>
-              {searching ? <CircleAlert aria-hidden="true" /> : <Fingerprint aria-hidden="true" />}
-              {searching ? 'Stop search' : isGeneratingRangeOnly ? canContinueRange ? 'Generate next block' : 'Generate all addresses' : 'Start local search'}
-            </button>
-            {notice && <div className="range-warning" role="status">{notice}</div>}
+            {autoResumeEnabled && (
+              <div className="auto-resume-banner">
+                <span>Session persistence active. You can resume scanning if interrupted.</span>
+                <button type="button" className="text-button" onClick={clearResumePreference}>Reset State</button>
+              </div>
+            )}
+
+            <div className="submit-row">
+              <button
+                type="submit"
+                className={`primary-button ${searching ? 'danger' : ''}`}
+                data-testid="button-start-search"
+              >
+                {searching ? 'Stop Search' : mode === 'range' && isGeneratingRangeOnly ? 'Generate Addresses' : 'Start Search'}
+              </button>
+            </div>
+
+            {notice && (
+              <div className="notice-box" role="status">
+                <CircleAlert aria-hidden="true" />
+                <span>{notice}</span>
+              </div>
+            )}
           </form>
 
-          <aside className="side-stack">
-            <section className="panel side-panel">
-              <h2 className="side-title"><LockKeyhole aria-hidden="true" /> Your keys stay yours</h2>
-              <ul className="privacy-list">
-                <li><Check aria-hidden="true" /><span>Private keys are created on this device.</span></li>
-                <li><Check aria-hidden="true" /><span>Nothing is sent to a server or saved to an account.</span></li>
-              </ul>
-            </section>
+          <aside className="panel status-panel" aria-label="Search status">
+            <div className="panel-heading">
+              <div className="section-kicker"><span className="step-number">02</span> Live telemetry</div>
+              <div className="subhead">Real-time worker performance</div>
+            </div>
+
+            <div className="metrics-grid">
+              <div className="metric-card">
+                <span className="metric-label">Status</span>
+                <span className="metric-value capitalize">{searchStatus}</span>
+              </div>
+              <div className="metric-card">
+                <span className="metric-label">Attempts</span>
+                <span className="metric-value">{attempts.toLocaleString()}</span>
+              </div>
+              <div className="metric-card">
+                <span className="metric-label">Elapsed Time</span>
+                <span className="metric-value">{(elapsedMs / 1000).toFixed(1)}s</span>
+              </div>
+              <div className="metric-card">
+                <span className="metric-label">Speed</span>
+                <span className="metric-value">
+                  {elapsedMs > 0 ? Math.floor((attempts / elapsedMs) * 1000).toLocaleString() : '0'} keys/sec
+                </span>
+              </div>
+            </div>
+
+            {progressPercent !== null && (
+              <div className="progress-container">
+                <div className="progress-labels">
+                  <span>Range Progress</span>
+                  <span>{progressPercent.toFixed(2)}%</span>
+                </div>
+                <div className="progress-bar-bg">
+                  <div className="progress-bar-fill" style={{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }} />
+                </div>
+              </div>
+            )}
+
+            {result && (
+              <div className="result-card" data-testid="card-search-result">
+                <div className="result-header">
+                  <Sparkles aria-hidden="true" />
+                  <span>Match Found!</span>
+                </div>
+                <div className="result-detail">
+                  <span>Address:</span>
+                  <code>{result.address}</code>
+                  <button className="icon-btn" onClick={() => copyValue(result.address, 'Address')}>
+                    <Copy size={14} />
+                  </button>
+                </div>
+                <div className="result-detail">
+                  <span>Private Key (Hex):</span>
+                  <code>{showPrivateKey ? result.privateKeyHex : '••••••••••••••••••••••••••••••••'}</code>
+                  <button className="icon-btn" onClick={() => setShowPrivateKey(!showPrivateKey)}>
+                    <Eye size={14} />
+                  </button>
+                  {showPrivateKey && (
+                    <button className="icon-btn" onClick={() => copyValue(result.privateKeyHex, 'Private Key Hex')}>
+                      <Copy size={14} />
+                    </button>
+                  )}
+                </div>
+                {result.privateKeyWif && (
+                  <div className="result-detail">
+                    <span>Private Key (WIF):</span>
+                    <code>{showPrivateKey ? result.privateKeyWif : '••••••••••••••••••••••••••••••••'}</code>
+                    {showPrivateKey && (
+                      <button className="icon-btn" onClick={() => copyValue(result.privateKeyWif, 'Private Key WIF')}>
+                        <Copy size={14} />
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </aside>
         </section>
 
-        <section className="panel" aria-label="Multi-chain helper" style={{ marginTop: 18, padding: 22 }}>
-          <div className="section-kicker"><span className="step-number">02</span> Quick multi-chain address helper</div>
-          <div className="subhead" style={{ marginBottom: 12 }}>Preview an address from a private key.</div>
-          <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'minmax(0,1.3fr) minmax(180px, 0.7fr)', alignItems: 'end' }}>
-            <div>
-              <label className="field-label">Private key (32-byte hex)</label>
-              <input className="target-input" value={multiChainKey} onChange={(event) => setMultiChainKey(event.target.value.trim())} placeholder="Paste a 64-character hex private key" />
-            </div>
-            <div>
-              <label className="field-label">Chain</label>
-              <div className="select-wrap">
-                <select className="select-control" value={multiChainChain} onChange={(event) => setMultiChainChain(event.target.value as MultiChainName)}>
-                  {MULTI_CHAIN_OPTIONS.map((c) => (<option key={c.id} value={c.id}>{c.label}</option>))}
-                </select>
+        {candidateRecords.length > 0 && (
+          <section className="panel results-panel" aria-label="Generated rows">
+            <div className="panel-heading">
+              <div>
+                <div className="section-kicker">Generated List</div>
+                <div className="subhead">{candidateRecords.length.toLocaleString()} items recorded in this session</div>
+              </div>
+              <div className="results-actions">
+                <button type="button" className="action-btn" onClick={copyAllAddresses}>
+                  <Copy size={14} /> Copy All
+                </button>
+                <button type="button" className="action-btn" onClick={() => downloadAddresses('csv')}>
+                  <Download size={14} /> CSV
+                </button>
+                <button type="button" className="action-btn primary" onClick={checkGeneratedBalances}>
+                  <Bitcoin size={14} /> Check Balances
+                </button>
               </div>
             </div>
-          </div>
-          {multiChainKey && (
-            <div style={{ marginTop: 16, padding: 14, borderRadius: 10, border: '1px solid #333', background: '#111113', overflowWrap: 'anywhere' }}>
-              <div className="result-label">Derived {MULTI_CHAIN_OPTIONS.find((c) => c.id === multiChainChain)?.label}</div>
-              {multiChainAddress ? <div className="address-text" style={{ marginTop: 8 }}>{multiChainAddress}</div> : <div className="range-warning">Invalid private key.</div>}
-            </div>
-          )}
-        </section>
 
-        <section className="panel result-panel" aria-label="Search result">
-          <div className="result-head">
-            <div>
-              <div className="section-kicker"><span className="step-number">03</span> Search status &amp; result</div>
+            <div className="search-filter-row">
+              <input
+                type="text"
+                className="filter-input"
+                placeholder="Filter generated addresses..."
+                value={generatedAddressSearch}
+                onChange={(event) => { setGeneratedAddressSearch(event.target.value); setHistoryPage(0); }}
+              />
             </div>
-            <div className={`status-pill ${searching ? 'status-running' : ''}`}><span className="status-dot" /> {searchStatus.toUpperCase()}</div>
-          </div>
-          {result && <div className="result-main" style={{ marginTop: 16 }}>
-            <div className="address-box">
-              <div className="result-label">Matched Address</div>
-              <div className="address-text">{result.address}</div>
-              <button className="small-button" type="button" onClick={() => void copyValue(result.address, 'Address')}><Copy /> Copy</button>
-            </div>
-            <div className="private-box">
-              <div className="result-label">Private key (Hex)</div>
-              <div className="private-value">{showPrivateKey ? result.privateKeyHex : '••••••••••••••••••••••••••••••••••••'}</div>
-              <button className="small-button" type="button" onClick={() => setShowPrivateKey(!showPrivateKey)}><Eye /> {showPrivateKey ? 'Hide' : 'Reveal'}</button>
-            </div>
-          </div>}
-          <div className="progress-track"><div className="progress-fill" style={{ width: `${progressPercent ?? (searching ? 12 : 0)}%` }} /></div>
-          <div className="progress-meta"><span>{attempts.toLocaleString()} checked</span><span>{elapsedMs > 0 ? `${Math.round(attempts / (elapsedMs / 1000)).toLocaleString()} keys/sec` : '— keys/sec'}</span></div>
-          {generatedOnly && candidateRecords.length > 0 && (
-            <section className="history-section" aria-label="Generated addresses" data-testid="section-candidate-history">
-              <div className="history-heading">
-                <div>
-                  <div className="result-label">Generated {MULTI_CHAIN_OPTIONS.find((option) => option.id === chain)?.label} addresses</div>
-                  <div className="history-count">{candidateRecords.length.toLocaleString()} addresses</div>
-                </div>
-                <div className="history-page-label">Page {historyPage + 1} of {historyPageCount}</div>
-              </div>
-              <div className="history-warning" role="alert">
-                These rows contain full private keys. Anyone who sees or copies one can spend funds sent to its address. The generated list is only held in memory and clears when the tab closes.
-              </div>
-              <label className="history-search" htmlFor="generated-address-search">
-                <Search aria-hidden="true" />
-                <input
-                  id="generated-address-search"
-                  type="search"
-                  value={generatedAddressSearch}
-                  onChange={(event) => {
-                    setGeneratedAddressSearch(event.target.value);
-                    setHistoryPage(0);
-                  }}
-                  placeholder="Search all generated addresses…"
-                  autoComplete="off"
-                  spellCheck={false}
-                  data-testid="input-generated-address-search"
-                />
-                <span className="history-search-count" aria-live="polite">
-                  {filteredGeneratedAddresses.length.toLocaleString()} / {generatedAddresses.length.toLocaleString()}
-                </span>
-              </label>
-              <div className="history-table-wrap">
-                <table className="history-table">
-                  <thead>
-                    <tr><th scope="col">Candidate</th><th scope="col">{MULTI_CHAIN_OPTIONS.find((option) => option.id === chain)?.label} address</th><th scope="col">{chain === 'btc' ? 'Private key · WIF' : 'Private key · Hex'}</th></tr>
-                  </thead>
-                  <tbody>
-                    {visibleHistory.map(({ record, address }) => (
-                      <tr key={record.index} data-testid={`row-candidate-${record.index}`}>
-                        <td>{record.index.toLocaleString()}</td>
-                        <td><code data-testid={`value-address-${record.index}`}>{address}</code></td>
-                        <td><code data-testid={`value-private-key-${record.index}`}>{chain === 'btc' ? record.privateKeyWif : record.privateKeyHex}</code></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {filteredGeneratedAddresses.length === 0 && (
-                  <p className="history-search-empty" role="status">No generated addresses match this search.</p>
-                )}
-              </div>
-              <div className="history-pagination">
-                <button className="small-button download-addresses-button" type="button" disabled={searching || autoResumePending} onClick={checkGeneratedBalances} data-testid="button-check-generated-balances"><ArrowUpRight aria-hidden="true" /> Check generated balances</button>
-                <button className="small-button download-addresses-button" type="button" onClick={() => void copyAllAddresses()} data-testid="button-copy-all-addresses"><Copy aria-hidden="true" /> Copy all addresses</button>
-                <button className="small-button download-addresses-button" type="button" onClick={() => downloadAddresses('csv')} data-testid="button-download-addresses-csv"><Download aria-hidden="true" /> Download addresses CSV</button>
-                <button className="small-button download-addresses-button" type="button" onClick={() => downloadAddresses('txt')} data-testid="button-download-addresses-txt"><Download aria-hidden="true" /> Download addresses TXT</button>
-                {historyPageCount > 1 && <>
-                  <button className="small-button" type="button" disabled={historyPage === 0} onClick={() => setHistoryPage((page) => Math.max(0, page - 1))}>Earlier addresses</button>
-                  <button className="small-button" type="button" disabled={historyPage >= historyPageCount - 1} onClick={() => setHistoryPage((page) => Math.min(historyPageCount - 1, page + 1))}>Later addresses</button>
-                </>}
-              </div>
-            </section>
-          )}
-        </section>
 
-        <footer className="footer-note">
-          <span><KeyRound aria-hidden="true" /> Never share a private key.</span>
-          <DonationAddress />
-        </footer>
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Address</th>
+                    <th>Private Key (Hex)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleHistory.map(({ record, address }) => (
+                    <tr key={`${record.index}-${address}`}>
+                      <td>{record.index}</td>
+                      <td><code>{address}</code></td>
+                      <td><code>{record.privateKeyHex}</code></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {historyPageCount > 1 && (
+              <div className="pagination-row">
+                <button
+                  type="button"
+                  disabled={historyPage === 0}
+                  onClick={() => setHistoryPage((p) => Math.max(0, p - 1))}
+                >
+                  Previous
+                </button>
+                <span>Page {historyPage + 1} of {historyPageCount}</span>
+                <button
+                  type="button"
+                  disabled={historyPage >= historyPageCount - 1}
+                  onClick={() => setHistoryPage((p) => Math.min(historyPageCount - 1, p + 1))}
+                >
+                  Next
+                </button>
+              </div>
+            )}
+          </section>
+        )}
       </main>
+
+      <footer className="footer">
+        <DonationAddress />
+      </footer>
     </div>
   );
 }
 
-function Router() {
-  const [location] = useLocation();
-  const isHome = location === '/';
-  const isBitcoinPuzzle = location === '/bitcoin-puzzle';
-  const isPuzzleAddressLookup = location === '/puzzle-address-lookup';
-  const isBitcoinBalance = location === '/balance-check';
-  const isBitcoinRangeLookup = location === '/range-lookup';
-  const isFinder = location === '/finder';
-  const isSelfTest = location === '/self-test';
-
+export default function App() {
   return (
-    <RoutedErrorBoundary>
-      <div hidden={!isHome}><Home /></div>
-      <div hidden={!isBitcoinPuzzle} className="app-shell"><SiteHeader activePage="puzzle"><span>LOCAL PUZZLE INDEX</span></SiteHeader><BitcoinPuzzlePage active={isBitcoinPuzzle} /></div>
-      <div hidden={!isPuzzleAddressLookup} className="app-shell"><SiteHeader activePage="puzzle"><span>PUZZLE ADDRESS LOOKUP</span></SiteHeader><BitcoinPuzzleAddressLookupPage active={isPuzzleAddressLookup} /></div>
-      <div hidden={!isBitcoinBalance} className="app-shell"><SiteHeader activePage="balance"><span>BULK BALANCE CHECK</span></SiteHeader><BitcoinBalancePage active={isBitcoinBalance} /></div>
-      <div hidden={!isBitcoinRangeLookup} className="app-shell"><SiteHeader activePage="range-lookup"><span>LOCAL RANGE LOOKUP</span></SiteHeader><BitcoinRangeLookupPage active={isBitcoinRangeLookup} /></div>
-      <div hidden={!isFinder} className="app-shell"><SiteHeader activePage="finder"><span>HD ADDRESS FINDER</span></SiteHeader><FinderPage /></div>
-      <div hidden={!isSelfTest} className="app-shell"><SiteHeader activePage="self-test"><span>LOCAL DIAGNOSTICS</span></SiteHeader><SelfTestPage /></div>
-      {!isHome && !isBitcoinPuzzle && !isPuzzleAddressLookup && !isBitcoinBalance && !isBitcoinRangeLookup && !isFinder && !isSelfTest && (<Switch><Route component={NotFound} /></Switch>)}
-    </RoutedErrorBoundary>
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <WouterRouter>
+            <Switch>
+              <Route path="/" component={Home} />
+              <Route path="/bitcoin-puzzle" component={BitcoinPuzzlePage} />
+              <Route path="/bitcoin-puzzle-address-lookup" component={BitcoinPuzzleAddressLookupPage} />
+              <Route path="/balance-check" component={BitcoinBalancePage} />
+              <Route path="/range-lookup" component={BitcoinRangeLookupPage} />
+              <Route path="/finder" component={FinderPage} />
+              <Route path="/self-test" component={SelfTestPage} />
+              <Route component={NotFound} />
+            </Switch>
+          </WouterRouter>
+          <Toaster />
+        </TooltipProvider>
+      </QueryClientProvider>
+    </ErrorBoundary>
   );
 }
-
-function RoutedErrorBoundary({ children }: { children: ReactNode }) {
-  const [location] = useLocation();
-  return <ErrorBoundary resetKey={location}>{children}</ErrorBoundary>;
-}
-
-function App() {
-  return (
-    <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
-          <Router />
-        </WouterRouter>
-        <Toaster />
-      </TooltipProvider>
-    </QueryClientProvider>
-  );
-}
-
-export default App;
