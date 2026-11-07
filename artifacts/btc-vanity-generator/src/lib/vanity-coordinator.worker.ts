@@ -10,7 +10,7 @@ import {
 const MAX_CPU_WORKERS = 32;
 
 const coordinator = self as unknown as {
-  onmessage: ((event: MessageEvent<WorkerRequest>) => void) | null;
+  onmessage: ((event: MessageEvent<WorkerRequest & { engine?: string }>) => void) | null;
   postMessage: (message: WorkerResponse) => void;
 };
 
@@ -113,6 +113,7 @@ coordinator.onmessage = (event) => {
   if (running) return;
 
   const options = event.data;
+  const engine = (options as any).engine ?? 'cpu'; // 👈 التقاط نوع المحرك المختار (cpu, webgl, webgpu)
   const startedAt = performance.now();
   stopRequested = false;
   running = true;
@@ -278,7 +279,9 @@ coordinator.onmessage = (event) => {
           finishWithError('A CPU worker stopped unexpectedly.');
         }
       };
-      worker.postMessage({ ...tasks[index], type: 'start' });
+      
+      // 🚀 تمرير بيانات المهام مع إرسال الـ engine المحدد للأطفال Workers
+      worker.postMessage({ ...tasks[index], engine, type: 'start' });
     });
   } catch (error) {
     finishWithError(
