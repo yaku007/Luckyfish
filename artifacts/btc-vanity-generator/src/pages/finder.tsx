@@ -14,7 +14,7 @@ export default function FinderPage() {
   const [endIndex, setEndIndex] = useState('1000');
   const [targetAddress, setTargetAddress] = useState('');
   
-  // 🚀 إضافات جديدة: المحرك وحفظ التقدم
+  // 🚀 إضافات المحرك وحفظ التقدم
   const [engine, setEngine] = useState<'cpu' | 'webgl' | 'webgpu'>('cpu');
   const [savedCursor, setSavedCursor] = useState<string | null>(null);
 
@@ -25,6 +25,7 @@ export default function FinderPage() {
   const [searching, setSearching] = useState(false);
   const workerRef = useRef<Worker | null>(null);
   const hdControllerRef = useRef<AbortController | null>(null);
+  const startTimeRef = useRef<number>(0);
 
   // التحقق من وجود تقدم سابق عند تحميل الصفحة
   useEffect(() => {
@@ -108,14 +109,24 @@ export default function FinderPage() {
     setError('');
     setMatch(null);
     setProgress(null);
+    startTimeRef.current = performance.now();
 
     const worker = new Worker(new URL('../lib/vanity-coordinator.worker.ts', import.meta.url), { type: 'module' });
     workerRef.current = worker;
 
     worker.onmessage = (event) => {
       const message = event.data;
-      if (message.type === 'progress') {
-        setProgress({ index: String(message.attempts), address: '', keysPerSecond: Math.floor(message.attempts / (message.elapsedMs / 1000)) });
+      if (message.type === 'progress' || message.attempts) {
+        const elapsedSec = message.elapsedMs ? message.elapsedMs / 1000 : Math.max(0.001, (performance.now() - startTimeRef.current) / 1000);
+        const attemptsCount = message.attempts || 0;
+        const currentSpeed = message.keysPerSecond || Math.floor(attemptsCount / elapsedSec);
+
+        setProgress({
+          index: String(attemptsCount),
+          address: '',
+          keysPerSecond: currentSpeed
+        });
+
         // حفظ التقدم دورياً في IndexedDB
         void saveSearchProgress('last_range_state', {
           cursor: startHex,
@@ -142,6 +153,7 @@ export default function FinderPage() {
 
     // إرسال البيانات للـ Coordinator مع تحديد الـ Engine
     worker.postMessage({
+      type: 'start',
       mode: 'range',
       startHex,
       endHex,
@@ -176,9 +188,9 @@ export default function FinderPage() {
 
       <section className="panel finder-panel" aria-label="Address finder">
         {savedCursor && mode === 'range' && !searching && (
-          <div className="mb-4 p-3 bg-amber-500/10 border border-amber-500/30 rounded flex justify-between items-center">
-            <span className="text-sm">Found previous search session. Do you want to resume?</span>
-            <button className="text-xs bg-amber-500 text-black px-3 py-1 rounded font-bold" onClick={handleResume}>
+          <div className="mb-4 p-3 bg-amber-500/10 border border-amber-500/30 rounded flex justify-between items-center" style={{ marginBottom: '16px', padding: '12px', background: '#24170e', border: '1px solid #65401f', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span className="text-sm" style={{ color: '#f3c89c', fontSize: '12px' }}>Found previous search session. Do you want to resume?</span>
+            <button className="text-xs bg-amber-500 text-black px-3 py-1 rounded font-bold" onClick={handleResume} style={{ background: '#f7931a', color: '#14100a', border: 0, padding: '6px 12px', borderRadius: '6px', fontWeight: 700, cursor: 'pointer' }}>
               Resume Last State
             </button>
           </div>
@@ -263,7 +275,7 @@ export default function FinderPage() {
                 </label>
                 <label className="finder-field">
                   <span>End index</span>
-                  <input type="number" min="0" max="2147483647" value= {endIndex} onChange={(event) => setEndIndex(event.target.value)} disabled={searching} required />
+                  <input type="number" min="0" max="2147483647" value={endIndex} onChange={(event) => setEndIndex(event.target.value)} disabled={searching} required />
                 </label>
               </div>
             </>
@@ -341,4 +353,5 @@ export default function FinderPage() {
       </section>
     </main>
   );
-                   }
+}
+```[cite: 2]
