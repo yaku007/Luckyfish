@@ -8,14 +8,15 @@ import './finder.css';
 export default function FinderPage() {
   const [mode, setMode] = useState<'range' | 'hd'>('range');
   const [startHex, setStartHex] = useState('1');
-  const [endHex, setEndHex] = useState('FFFFFFFFFFFFFF');
+  const [endHex, setEndHex] = useState('FFFFF');
   const [xpub, setXpub] = useState('');
-  const [chain, setChain] = useState<MultiChainName>('eth');
+  const [chain, setChain] = useState<MultiChainName>('btc');
   const [startIndex, setStartIndex] = useState('0');
   const [endIndex, setEndIndex] = useState('1000');
   const [targetAddress, setTargetAddress] = useState('');
   
-  const [engine, setEngine] = useState<'cpu' | 'webgl' | 'webgpu'>('webgpu');
+  // 🚀 إضافات المحرك وحفظ التقدم
+  const [engine, setEngine] = useState<'cpu' | 'webgl' | 'webgpu'>('cpu');
   const [savedCursor, setSavedCursor] = useState<string | null>(null);
 
   const [status, setStatus] = useState('Ready');
@@ -33,6 +34,7 @@ export default function FinderPage() {
   const startTimeRef = useRef<number>(0);
   const lastUpdateRef = useRef<number>(0);
 
+  // التحقق من وجود تقدم سابق عند تحميل الصفحة
   useEffect(() => {
     void getSearchProgress('last_range_state').then((data) => {
       if (data && data.cursor) {
@@ -44,7 +46,11 @@ export default function FinderPage() {
   }, []);
 
   const copyValue = async (value: string) => {
-    try { await navigator.clipboard.writeText(value); } catch {}
+    try {
+      await navigator.clipboard.writeText(value);
+    } catch {
+      // ignore
+    }
   };
 
   function handleSearch(event: FormEvent<HTMLFormElement>) {
@@ -64,7 +70,15 @@ export default function FinderPage() {
       const firstIndex = Number(startIndex);
       const lastIndex = Number(endIndex);
       if (!/^\d+$/.test(startIndex) || !/^\d+$/.test(endIndex)) {
-        setError('Enter valid numeric HD indexes.');
+        setError('Enter whole-number HD indexes.');
+        return;
+      }
+      if (!Number.isSafeInteger(firstIndex) || !Number.isSafeInteger(lastIndex) || lastIndex < firstIndex) {
+        setError('Enter a valid HD index range.');
+        return;
+      }
+      if (lastIndex - firstIndex > 100_000) {
+        setError('Search ranges are limited to 100,001 addresses per run.');
         return;
       }
 
@@ -89,21 +103,24 @@ export default function FinderPage() {
         signal: controller.signal,
         onProgress: (item) => {
           const now = performance.now();
-          setAttempts(item.index - firstIndex + 1);
-          setElapsedMs(now - startTimeRef.current);
-          setKeysPerSec(item.keysPerSecond);
+          const currentAttempts = item.index - firstIndex + 1;
+          const duration = Math.max(1, now - startTimeRef.current);
+          setAttempts(currentAttempts);
+          setElapsedMs(duration);
+          setKeysPerSec(item.keysPerSecond || Math.floor((currentAttempts / duration) * 1000));
         },
       }).then((result) => {
         setMatch(result);
-        setStatus(result ? 'HD match found!' : 'Search complete — no match');
+        setStatus(result ? 'HD address match found!' : 'Search complete — no match found');
       }).catch((searchError: unknown) => {
         if (controller.signal.aborted) {
           setStatus('Search stopped');
         } else {
           setError(searchError instanceof Error ? searchError.message : 'HD search failed.');
-          setStatus('Error');
+          setStatus('Search could not start');
         }
       }).finally(() => {
+        if (hdControllerRef.current === controller) hdControllerRef.current = null;
         setSearching(false);
       });
       return;
@@ -128,11 +145,10 @@ export default function FinderPage() {
       const now = performance.now();
 
       if (message.type === 'progress' || message.attempts) {
-        // Throttled State Updates for High Speed Telemetry (8M+ keys/sec support)
         if (now - lastUpdateRef.current > 80 || message.type === 'found') {
           const duration = Math.max(1, now - startTimeRef.current);
           const currentAttempts = message.attempts;
-          const calculatedSpeed = Math.floor((currentAttempts / (duration / 1000)));
+          const calculatedSpeed = Math.floor((currentAttempts / duration) * 1000);
 
           setAttempts(currentAttempts);
           setElapsedMs(duration);
@@ -142,6 +158,7 @@ export default function FinderPage() {
           lastUpdateRef.current = now;
         }
 
+        // حفظ التقدم دورياً في IndexedDB
         void saveSearchProgress('last_range_state', {
           cursor: startHex,
           targetAddress,
@@ -150,21 +167,22 @@ export default function FinderPage() {
         });
       } else if (message.type === 'found') {
         setMatch(message.result);
-        setStatus('Found');
+        setStatus('Match found!');
         setSearching(false);
         worker.terminate();
       } else if (message.type === 'exhausted') {
-        setStatus('Exhausted');
+        setStatus('Search complete — no match found');
         setSearching(false);
         worker.terminate();
       } else if (message.type === 'error') {
         setError(message.message);
-        setStatus('Error');
+        setStatus('Search could not start');
         setSearching(false);
         worker.terminate();
       }
     };
 
+    // إرسال البيانات للـ Coordinator مع تحديد الـ Engine
     worker.postMessage({
       type: 'start',
       mode: 'range',
@@ -172,12 +190,13 @@ export default function FinderPage() {
       endHex,
       targetAddress,
       chain,
-      engine,
-      batchSize: 500000, // Large Batching for GPU Compute
-      workerCount: typeof navigator !== 'undefined' ? (navigator.hardwareConcurrency || 8) : 8,
+      engine, // 👈 تمرير نوع المحرك المختار (cpu, webgl, webgpu)
+      batchSize: 500000,
+      workerCount: 4,
     });
   }
 
+  // دالة استئناف البحث من آخر نقطة
   function handleResume() {
     if (savedCursor) {
       setStartHex(savedCursor);
@@ -195,172 +214,167 @@ export default function FinderPage() {
     <main className="page-wrap finder-page">
       <section className="intro">
         <div className="eyebrow">
-          {mode === 'hd' ? 'MULTICHAIN HD ADDRESS FINDER' : 'HIGH-SPEED MULTICHAIN BRUTE FORCE'}
+          {mode === 'hd' ? 'MULTICHAIN HD ADDRESS FINDER' : 'MULTICHAIN ADDRESS FINDER (BRUTE FORCE)'}
         </div>
         <h1>{mode === 'hd' ? 'HD Address Finder' : 'Find Private Key by Address'}</h1>
         <p className="intro-copy">
           {mode === 'hd'
             ? 'Match a public address against indexes derived from an account xpub.'
-            : 'Hardware-accelerated private key scanner powered by WebGPU & multi-threaded workers.'}
+            : 'Search a specific range of private keys to find the matching address.'}
         </p>
       </section>
 
       <section className="workspace" aria-label="Address finder workspace">
         <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '20px' }}>
           {savedCursor && mode === 'range' && !searching && (
-            <div className="p-3 border rounded flex justify-between items-center" style={{ background: '#24170e', border: '1px solid #65401f', padding: '12px 16px', borderRadius: '10px' }}>
-              <span style={{ color: '#f3c89c', fontSize: '12px' }}>Found previous search session. Do you want to resume?</span>
-              <button onClick={handleResume} style={{ background: '#f7931a', color: '#14100a', border: 0, padding: '6px 12px', borderRadius: '6px', fontWeight: 700, fontSize: '11px' }}>
+            <div className="p-3 rounded flex justify-between items-center" style={{ background: '#24170e', border: '1px solid #65401f', padding: '12px 16px', borderRadius: '10px' }}>
+              <span className="text-sm" style={{ color: '#f3c89c', fontSize: '12px' }}>Found previous search session. Do you want to resume?</span>
+              <button className="text-xs px-3 py-1 rounded font-bold" onClick={handleResume} style={{ background: '#f7931a', color: '#14100a', border: 0, padding: '6px 12px', borderRadius: '6px', fontWeight: 700, fontSize: '11px' }}>
                 Resume Last State
               </button>
             </div>
           )}
 
-          <form className="panel search-panel" onSubmit={handleSearch}>
+          <form className="panel finder-panel" onSubmit={handleSearch}>
             <div className="panel-heading">
               <div>
                 <div className="section-kicker"><span className="step-number">01</span> Configuration</div>
-                <div className="subhead">Set mode, hardware engine, and target parameters.</div>
+                <div className="subhead">Set search mode and target parameters.</div>
               </div>
             </div>
 
-            <label className="field-label">Finder mode</label>
-            <div className="select-wrap" style={{ marginBottom: 16 }}>
+            <label className="finder-field">
+              <span>Finder mode</span>
               <select
-                className="select-control"
                 value={mode}
-                onChange={(e) => {
-                  setMode(e.target.value as 'range' | 'hd');
+                onChange={(event) => {
+                  setMode(event.target.value as 'range' | 'hd');
                   setSearching(false);
                   setStatus('Ready');
                   setError('');
                   setMatch(null);
+                  setProgressPercent(null);
                 }}
                 disabled={searching}
               >
                 <option value="range">Private-key range (Brute Force)</option>
                 <option value="hd">HD address lookup (xpub)</option>
               </select>
-            </div>
+            </label>
 
+            {/* ⚡ اختيار المحرك (Engine Selector) */}
             {mode === 'range' && (
-              <div style={{ marginBottom: 16 }}>
-                <label className="field-label">Compute Engine / Hardware Acceleration</label>
-                <div className="select-wrap">
-                  <select
-                    className="select-control"
-                    value={engine}
-                    onChange={(e) => setEngine(e.target.value as 'cpu' | 'webgl' | 'webgpu')}
-                    disabled={searching}
-                  >
-                    <option value="webgpu">WebGPU (Ultra Fast GPU Pipeline - Recommended for 8M+ keys/s)</option>
-                    <option value="webgl">WebGL (GPU Shaders)</option>
-                    <option value="cpu">CPU (Multi-threaded Workers)</option>
-                  </select>
-                </div>
-              </div>
+              <label className="finder-field" style={{ marginTop: 16 }}>
+                <span>Compute Engine / Hardware</span>
+                <select
+                  value={engine}
+                  onChange={(event) => setEngine(event.target.value as 'cpu' | 'webgl' | 'webgpu')}
+                  disabled={searching}
+                >
+                  <option value="cpu">CPU (Multi-threaded Workers - Stable)</option>
+                  <option value="webgl">WebGL (GPU Accelerated)</option>
+                  <option value="webgpu">WebGPU (Ultra Fast GPU)</option>
+                </select>
+              </label>
             )}
 
             {mode === 'hd' ? (
               <>
-                <label className="field-label">Account extended public key (xpub)</label>
-                <div className="input-row" style={{ marginBottom: 16 }}>
+                <label className="finder-field" style={{ marginTop: 16 }}>
+                  <span>Account extended public key (xpub)</span>
                   <input
-                    className="target-input"
+                    autoComplete="off"
+                    spellCheck={false}
                     value={xpub}
-                    onChange={(e) => setXpub(e.target.value.trim())}
+                    onChange={(event) => setXpub(event.target.value.trim())}
                     placeholder="xpub..."
                     disabled={searching}
                     required
                   />
-                </div>
-                <div className="field-grid" style={{ marginBottom: 16 }}>
-                  <div>
-                    <label className="field-label">Chain</label>
-                    <div className="select-wrap">
-                      <select className="select-control" value={chain} onChange={(e) => setChain(e.target.value as MultiChainName)} disabled={searching}>
-                        {MULTI_CHAIN_OPTIONS.map((opt) => (
-                          <option key={opt.id} value={opt.id}>{opt.label}</option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-                  <div>
-                    <label className="field-label">Address to match</label>
+                </label>
+                <div className="finder-index-row" style={{ marginTop: 16 }}>
+                  <label className="finder-field">
+                    <span>Chain</span>
+                    <select value={chain} onChange={(event) => setChain(event.target.value as MultiChainName)} disabled={searching}>
+                      {MULTI_CHAIN_OPTIONS.map((option) => (
+                        <option key={option.id} value={option.id}>{option.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="finder-field">
+                    <span>Address to match</span>
                     <input
-                      className="target-input"
+                      autoComplete="off"
+                      spellCheck={false}
                       value={targetAddress}
-                      onChange={(e) => setTargetAddress(e.target.value)}
-                      placeholder={chain === 'btc' ? '1... or bc1q...' : '0x...'}
+                      onChange={(event) => setTargetAddress(event.target.value)}
+                      placeholder={chain === 'btc' ? 'Legacy address (1...)' : '0x...'}
                       disabled={searching}
                       required
-                      style={{ paddingLeft: '12px' }}
                     />
-                  </div>
+                  </label>
                 </div>
-                <div className="field-grid">
-                  <div>
-                    <label className="field-label">Start index</label>
-                    <input className="range-input" type="number" min="0" value={startIndex} onChange={(e) => setStartIndex(e.target.value)} disabled={searching} required />
-                  </div>
-                  <div>
-                    <label className="field-label">End index</label>
-                    <input className="range-input" type="number" min="0" value={endIndex} onChange={(e) => setEndIndex(e.target.value)} disabled={searching} required />
-                  </div>
+                <div className="finder-index-row" style={{ marginTop: 16 }}>
+                  <label className="finder-field">
+                    <span>Start index</span>
+                    <input type="number" min="0" max="2147483647" value={startIndex} onChange={(event) => setStartIndex(event.target.value)} disabled={searching} required />
+                  </label>
+                  <label className="finder-field">
+                    <span>End index</span>
+                    <input type="number" min="0" max="2147483647" value={endIndex} onChange={(event) => setEndIndex(event.target.value)} disabled={searching} required />
+                  </label>
                 </div>
               </>
             ) : (
               <>
-                <div className="field-grid" style={{ marginBottom: 16 }}>
-                  <div>
-                    <label className="field-label">Chain</label>
-                    <div className="select-wrap">
-                      <select className="select-control" value={chain} onChange={(e) => setChain(e.target.value as MultiChainName)} disabled={searching}>
-                        {MULTI_CHAIN_OPTIONS.map((opt) => (
-                          <option key={opt.id} value={opt.id}>{opt.label}</option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-                  <div>
-                    <label className="field-label">Address to find</label>
+                <div className="finder-index-row" style={{ marginTop: 16 }}>
+                  <label className="finder-field">
+                    <span>Chain</span>
+                    <select value={chain} onChange={(event) => setChain(event.target.value as MultiChainName)} disabled={searching}>
+                      {MULTI_CHAIN_OPTIONS.map((option) => (
+                        <option key={option.id} value={option.id}>{option.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="finder-field">
+                    <span>Address to find</span>
                     <input
-                      className="target-input"
+                      autoComplete="off"
+                      spellCheck={false}
                       value={targetAddress}
-                      onChange={(e) => setTargetAddress(e.target.value)}
+                      onChange={(event) => setTargetAddress(event.target.value)}
                       placeholder={chain === 'btc' ? '1... or bc1q...' : '0x...'}
                       disabled={searching}
                       required
-                      style={{ paddingLeft: '12px' }}
                     />
-                  </div>
+                  </label>
                 </div>
 
-                <div className="range-fields">
-                  <div>
-                    <label className="field-label">Start Key (Hex)</label>
-                    <input className="range-input" type="text" value={startHex} onChange={(e) => setStartHex(e.target.value)} disabled={searching} required />
-                  </div>
-                  <div>
-                    <label className="field-label">End Key (Hex)</label>
-                    <input className="range-input" type="text" value={endHex} onChange={(e) => setEndHex(e.target.value)} disabled={searching} required />
-                  </div>
+                <div className="finder-index-row" style={{ marginTop: 16 }}>
+                  <label className="finder-field">
+                    <span>Start Key (Hex)</span>
+                    <input type="text" value={startHex} onChange={(e) => setStartHex(e.target.value)} disabled={searching} required />
+                  </label>
+                  <label className="finder-field">
+                    <span>End Key (Hex)</span>
+                    <input type="text" value={endHex} onChange={(e) => setEndHex(e.target.value)} disabled={searching} required />
+                  </label>
                 </div>
               </>
             )}
 
-            <button className="primary-button" type="submit">
+            <button className="primary-button" type="submit" style={{ marginTop: 20 }}>
               {searching ? <CircleAlert size={16} /> : (engine === 'webgpu' ? <Zap size={16} /> : <Fingerprint size={16} />)}
               {searching ? 'Stop search' : 'Start High-Speed Search'}
             </button>
             {error && <div className="range-warning" style={{ marginTop: 12 }}>{error}</div>}
           </form>
 
-          {/* Telemetry Display */}
+          {/* 📊 Telemetry & Results Dashboard */}
           <aside className="panel status-panel" aria-label="Search telemetry" style={{ padding: '23px 27px' }}>
             <div className="result-head" style={{ marginBottom: 18 }}>
               <div>
-                <div className="section-kicker"><span className="step-number">02</span> Telemetry Performance</div>
+                <div className="section-kicker"><span className="step-number">02</span> Live telemetry &amp; Results</div>
               </div>
               <div className={`status-pill ${searching ? 'status-running' : ''}`}>
                 <span className="status-dot" /> {status.toUpperCase()}
@@ -380,9 +394,9 @@ export default function FinderPage() {
                 <span className="result-label">Elapsed Time</span>
                 <div style={{ fontSize: '12px', fontWeight: 700, color: '#f4f4f5', marginTop: '4px' }}>{(elapsedMs / 1000).toFixed(1)}s</div>
               </div>
-              <div className="address-box" style={{ padding: '10px', borderColor: keysPerSec > 1000000 ? '#f7931a' : undefined }}>
-                <span className="result-label" style={{ color: keysPerSec > 1000000 ? '#ffbd72' : undefined }}>Speed</span>
-                <div style={{ fontSize: '12px', fontWeight: 800, color: keysPerSec > 1000000 ? '#ffbd72' : '#f4f4f5', marginTop: '4px' }}>
+              <div className="address-box" style={{ padding: '10px', borderColor: keysPerSec > 1_000_000 ? '#f7931a' : undefined }}>
+                <span className="result-label" style={{ color: keysPerSec > 1_000_000 ? '#ffbd72' : undefined }}>Speed</span>
+                <div style={{ fontSize: '12px', fontWeight: 800, color: keysPerSec > 1_000_000 ? '#ffbd72' : '#f4f4f5', marginTop: '4px' }}>
                   {formatSpeed(keysPerSec)}
                 </div>
               </div>
@@ -419,6 +433,17 @@ export default function FinderPage() {
                       </div>
                     </div>
                   )}
+                  {match.index !== undefined && (
+                    <div style={{ marginTop: 10 }}>
+                      <span className="result-label">HD Index:</span> <code style={{ color: '#f4f4f5' }}>{match.index}</code>
+                    </div>
+                  )}
+                  {match.privateKeyWif && (
+                    <div style={{ marginTop: 10 }}>
+                      <span className="result-label">Private Key WIF:</span>
+                      <div className="private-value" style={{ marginTop: 4 }}>{match.privateKeyWif}</div>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -427,4 +452,4 @@ export default function FinderPage() {
       </section>
     </main>
   );
-        }
+          }
