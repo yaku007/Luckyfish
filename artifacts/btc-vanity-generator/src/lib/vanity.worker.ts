@@ -2,6 +2,7 @@
 
 import {
   deriveBitcoinAddress,
+  deriveBitcoinAddressOnly,
   PRIVATE_KEY_LIMIT,
   privateKeyFromRangeValue,
   randomPrivateKey,
@@ -11,9 +12,15 @@ import {
   matchesEvmVanityPattern,
 } from "./multichain";
 import {
+  CANDIDATE_BATCH_SIZE,
+  MAX_RECORDED_RANGE_CANDIDATES,
+  type CandidateRecord,
   type WorkerRequest,
   type WorkerResponse,
 } from "./vanity-protocol";
+import { WebGPUBruteEngine } from "./gpu-brute-engine";
+
+const MAX_CANDIDATES_BETWEEN_YIELDS = 64;
 
 const worker = self as unknown as {
   onmessage: ((event: MessageEvent<WorkerRequest>) => void) | null;
@@ -22,6 +29,17 @@ const worker = self as unknown as {
 
 let stopRequested = false;
 let running = false;
+const gpuEngine = new WebGPUBruteEngine();
+
+function matches(
+  address: string,
+  prefix: string,
+  suffix: string,
+  targetAddress: string,
+): boolean {
+  if (targetAddress) return address.toLowerCase() === targetAddress.toLowerCase();
+  return address.startsWith(prefix) && address.endsWith(suffix);
+}
 
 function parseRangeValue(value: string | undefined, label: string): bigint {
   const normalized = (value ?? "").trim().replace(/^0x/i, "");
@@ -33,6 +51,32 @@ function parseRangeValue(value: string | undefined, label: string): bigint {
     throw new Error(`${label} is outside the valid Bitcoin private-key range.`);
   }
   return parsed;
+}
+
+function reportProgress(
+  attempts: number,
+  startedAt: number,
+  rangePercent: number | null,
+) {
+  const elapsedMs = Math.max(1, performance.now() - startedAt);
+  worker.postMessage({
+    type: "progress",
+    attempts,
+    elapsedMs,
+    percent: rangePercent,
+  });
+}
+
+function reportEnd(
+  type: "exhausted" | "stopped" | "generated",
+  attempts: number,
+  startedAt: number,
+) {
+  worker.postMessage({
+    type,
+    attempts,
+    elapsedMs: Math.max(1, performance.now() - startedAt),
+  });
 }
 
 worker.onmessage = (event) => {
@@ -52,8 +96,13 @@ worker.onmessage = (event) => {
     let start = 0n;
     let end = 0n;
     let cursor = 0n;
+    let pendingCandidates: CandidateRecord[] = [];
 
     try {
+      if (options.generateOnly && options.mode !== "range") {
+        throw new Error("Generate-only mode requires a custom key range.");
+      }
+
       if (options.mode === "range") {
         start = parseRangeValue(options.startHex, "Start of range");
         end = parseRangeValue(options.endHex, "End of range");
@@ -63,21 +112,43 @@ worker.onmessage = (event) => {
         cursor = start;
       }
 
+      if ((options as any).engine === 'webgpu') {
+        await gpuEngine.initialize();
+      }
+
       const rangeSize = options.mode === "range" ? end - start + 1n : 0n;
-      let lastReportAt = performance.now();
+      let lastReportAt = 0;
+
+      const flushCandidates = () => {
+        if (pendingCandidates.length === 0) return;
+        worker.postMessage({
+          type: "candidates",
+          candidates: pendingCandidates,
+        });
+        pendingCandidates = [];
+      };
 
       while (!stopRequested) {
-        for (let batch = 0; batch < 2000 && !stopRequested; batch++) {
+        for (
+          let count = 0;
+          count < MAX_CANDIDATES_BETWEEN_YIELDS && !stopRequested;
+          count += 1
+        ) {
           if (options.mode === "range" && cursor > end) {
-            worker.postMessage({
-              type: "exhausted",
+            flushCandidates();
+            reportEnd(
+              options.generateOnly ? "generated" : "exhausted",
               attempts,
-              elapsedMs: Math.max(1, performance.now() - startedAt),
-            });
+              startedAt,
+            );
             return;
           }
 
-          const currentCursor = cursor;
+          if ((options as any).engine === 'webgpu' && gpuEngine.getSupported()) {
+            await gpuEngine.executeRangeBatch(Number(cursor & 0xffffffffn), 256);
+          }
+
+          const currentKeyVal = cursor;
           const key =
             options.mode === "range"
               ? privateKeyFromRangeValue(cursor++)
@@ -104,10 +175,28 @@ worker.onmessage = (event) => {
 
           attempts += 1;
 
-          const target = (options.targetAddress ?? "").trim().toLowerCase();
-          const isMatch = target ? address.toLowerCase() === target : false;
+          if (options.generateOnly && options.mode === "range") {
+            pendingCandidates.push({
+              index: (options.candidateOffset ?? 0) + attempts,
+              address,
+              selectedChainAddress: address,
+              privateKeyWif: keyResult.privateKeyWif || "",
+              privateKeyHex: keyResult.privateKeyHex,
+              rangeStartHex: start.toString(16),
+              rangeEndHex: end.toString(16),
+            });
+            if (pendingCandidates.length >= CANDIDATE_BATCH_SIZE) {
+              flushCandidates();
+            }
+          }
+
+          const target = options.targetAddress ?? "";
+          const isMatch = isEvmChain
+            ? (target ? address.toLowerCase() === target.toLowerCase() : matchesEvmVanityPattern(address, options.prefix, options.suffix))
+            : matches(address, options.prefix, options.suffix, target);
 
           if (isMatch) {
+            flushCandidates();
             worker.postMessage({
               type: "found",
               attempts,
@@ -117,7 +206,6 @@ worker.onmessage = (event) => {
                 address,
                 rangeStartHex: start.toString(16),
                 rangeEndHex: end.toString(16),
-                privateKeyHex: keyResult.privateKeyHex || Array.from(key, (b) => b.toString(16).padStart(2, "0")).join(""),
               },
             });
             return;
@@ -133,23 +221,15 @@ worker.onmessage = (event) => {
                   Number(((cursor - start) * 1_000_000n) / rangeSize) / 10_000,
                 )
               : null;
-          worker.postMessage({
-            type: "progress",
-            attempts,
-            elapsedMs: Math.max(1, performance.now() - startedAt),
-            percent,
-          });
+          reportProgress(attempts, startedAt, percent);
           lastReportAt = now;
         }
 
         await new Promise<void>((resolve) => setTimeout(resolve, 0));
       }
 
-      worker.postMessage({
-        type: "stopped",
-        attempts,
-        elapsedMs: Math.max(1, performance.now() - startedAt),
-      });
+      flushCandidates();
+      reportEnd("stopped", attempts, startedAt);
     } catch (error) {
       worker.postMessage({
         type: "error",
