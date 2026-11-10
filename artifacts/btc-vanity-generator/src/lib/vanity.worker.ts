@@ -2,7 +2,6 @@
 
 import {
   deriveBitcoinAddress,
-  deriveBitcoinAddressOnly,
   PRIVATE_KEY_LIMIT,
   privateKeyFromRangeValue,
   randomPrivateKey,
@@ -12,15 +11,10 @@ import {
   matchesEvmVanityPattern,
 } from "./multichain";
 import {
-  CANDIDATE_BATCH_SIZE,
-  MAX_RECORDED_RANGE_CANDIDATES,
-  type CandidateRecord,
   type WorkerRequest,
   type WorkerResponse,
 } from "./vanity-protocol";
 import { WebGPUBruteEngine } from "./gpu-brute-engine";
-
-const MAX_CANDIDATES_BETWEEN_YIELDS = 64;
 
 const worker = self as unknown as {
   onmessage: ((event: MessageEvent<WorkerRequest>) => void) | null;
@@ -68,7 +62,7 @@ function reportProgress(
 }
 
 function reportEnd(
-  type: "exhausted" | "stopped" | "generated",
+  type: "exhausted" | "stopped",
   attempts: number,
   startedAt: number,
 ) {
@@ -96,13 +90,8 @@ worker.onmessage = (event) => {
     let start = 0n;
     let end = 0n;
     let cursor = 0n;
-    let pendingCandidates: CandidateRecord[] = [];
 
     try {
-      if (options.generateOnly && options.mode !== "range") {
-        throw new Error("Generate-only mode requires a custom key range.");
-      }
-
       if (options.mode === "range") {
         start = parseRangeValue(options.startHex, "Start of range");
         end = parseRangeValue(options.endHex, "End of range");
@@ -117,30 +106,14 @@ worker.onmessage = (event) => {
       }
 
       const rangeSize = options.mode === "range" ? end - start + 1n : 0n;
-      let lastReportAt = 0;
+      let lastReportAt = performance.now();
 
-      const flushCandidates = () => {
-        if (pendingCandidates.length === 0) return;
-        worker.postMessage({
-          type: "candidates",
-          candidates: pendingCandidates,
-        });
-        pendingCandidates = [];
-      };
-
+      // 🚀 Tight Brute-force Loop (Non-stop Execution)
       while (!stopRequested) {
-        for (
-          let count = 0;
-          count < MAX_CANDIDATES_BETWEEN_YIELDS && !stopRequested;
-          count += 1
-        ) {
+        // حلقة سرعة قوية بدون Yields معطلة
+        for (let batch = 0; batch < 2000 && !stopRequested; batch++) {
           if (options.mode === "range" && cursor > end) {
-            flushCandidates();
-            reportEnd(
-              options.generateOnly ? "generated" : "exhausted",
-              attempts,
-              startedAt,
-            );
+            reportEnd("exhausted", attempts, startedAt);
             return;
           }
 
@@ -148,7 +121,7 @@ worker.onmessage = (event) => {
             await gpuEngine.executeRangeBatch(Number(cursor & 0xffffffffn), 256);
           }
 
-          const currentKeyVal = cursor;
+          const currentCursor = cursor;
           const key =
             options.mode === "range"
               ? privateKeyFromRangeValue(cursor++)
@@ -175,28 +148,12 @@ worker.onmessage = (event) => {
 
           attempts += 1;
 
-          if (options.generateOnly && options.mode === "range") {
-            pendingCandidates.push({
-              index: (options.candidateOffset ?? 0) + attempts,
-              address,
-              selectedChainAddress: address,
-              privateKeyWif: keyResult.privateKeyWif || "",
-              privateKeyHex: keyResult.privateKeyHex,
-              rangeStartHex: start.toString(16),
-              rangeEndHex: end.toString(16),
-            });
-            if (pendingCandidates.length >= CANDIDATE_BATCH_SIZE) {
-              flushCandidates();
-            }
-          }
-
           const target = options.targetAddress ?? "";
           const isMatch = isEvmChain
             ? (target ? address.toLowerCase() === target.toLowerCase() : matchesEvmVanityPattern(address, options.prefix, options.suffix))
             : matches(address, options.prefix, options.suffix, target);
 
           if (isMatch) {
-            flushCandidates();
             worker.postMessage({
               type: "found",
               attempts,
@@ -206,14 +163,16 @@ worker.onmessage = (event) => {
                 address,
                 rangeStartHex: start.toString(16),
                 rangeEndHex: end.toString(16),
+                matchedKeyHex: currentCursor.toString(16),
               },
             });
             return;
           }
         }
 
+        // تحديث الـ Telemetry كل 100ms بدون إيقاف الـ Loop
         const now = performance.now();
-        if (now - lastReportAt >= 150) {
+        if (now - lastReportAt >= 100) {
           const percent =
             options.mode === "range" && rangeSize > 0n
               ? Math.min(
@@ -225,10 +184,10 @@ worker.onmessage = (event) => {
           lastReportAt = now;
         }
 
+        // السماح للـ Worker بإرسال الـ Messages بدون خنق الـ Core
         await new Promise<void>((resolve) => setTimeout(resolve, 0));
       }
 
-      flushCandidates();
       reportEnd("stopped", attempts, startedAt);
     } catch (error) {
       worker.postMessage({
