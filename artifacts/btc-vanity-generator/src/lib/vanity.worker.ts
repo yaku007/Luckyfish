@@ -14,7 +14,6 @@ import {
   type WorkerRequest,
   type WorkerResponse,
 } from "./vanity-protocol";
-import { WebGPUBruteEngine } from "./gpu-brute-engine";
 
 const worker = self as unknown as {
   onmessage: ((event: MessageEvent<WorkerRequest>) => void) | null;
@@ -23,17 +22,6 @@ const worker = self as unknown as {
 
 let stopRequested = false;
 let running = false;
-const gpuEngine = new WebGPUBruteEngine();
-
-function matches(
-  address: string,
-  prefix: string,
-  suffix: string,
-  targetAddress: string,
-): boolean {
-  if (targetAddress) return address.toLowerCase() === targetAddress.toLowerCase();
-  return address.startsWith(prefix) && address.endsWith(suffix);
-}
 
 function parseRangeValue(value: string | undefined, label: string): bigint {
   const normalized = (value ?? "").trim().replace(/^0x/i, "");
@@ -45,32 +33,6 @@ function parseRangeValue(value: string | undefined, label: string): bigint {
     throw new Error(`${label} is outside the valid Bitcoin private-key range.`);
   }
   return parsed;
-}
-
-function reportProgress(
-  attempts: number,
-  startedAt: number,
-  rangePercent: number | null,
-) {
-  const elapsedMs = Math.max(1, performance.now() - startedAt);
-  worker.postMessage({
-    type: "progress",
-    attempts,
-    elapsedMs,
-    percent: rangePercent,
-  });
-}
-
-function reportEnd(
-  type: "exhausted" | "stopped",
-  attempts: number,
-  startedAt: number,
-) {
-  worker.postMessage({
-    type,
-    attempts,
-    elapsedMs: Math.max(1, performance.now() - startedAt),
-  });
 }
 
 worker.onmessage = (event) => {
@@ -101,24 +63,18 @@ worker.onmessage = (event) => {
         cursor = start;
       }
 
-      if ((options as any).engine === 'webgpu') {
-        await gpuEngine.initialize();
-      }
-
       const rangeSize = options.mode === "range" ? end - start + 1n : 0n;
       let lastReportAt = performance.now();
 
-      // 🚀 Tight Brute-force Loop (Non-stop Execution)
       while (!stopRequested) {
-        // حلقة سرعة قوية بدون Yields معطلة
         for (let batch = 0; batch < 2000 && !stopRequested; batch++) {
           if (options.mode === "range" && cursor > end) {
-            reportEnd("exhausted", attempts, startedAt);
+            worker.postMessage({
+              type: "exhausted",
+              attempts,
+              elapsedMs: Math.max(1, performance.now() - startedAt),
+            });
             return;
-          }
-
-          if ((options as any).engine === 'webgpu' && gpuEngine.getSupported()) {
-            await gpuEngine.executeRangeBatch(Number(cursor & 0xffffffffn), 256);
           }
 
           const currentCursor = cursor;
@@ -148,10 +104,8 @@ worker.onmessage = (event) => {
 
           attempts += 1;
 
-          const target = options.targetAddress ?? "";
-          const isMatch = isEvmChain
-            ? (target ? address.toLowerCase() === target.toLowerCase() : matchesEvmVanityPattern(address, options.prefix, options.suffix))
-            : matches(address, options.prefix, options.suffix, target);
+          const target = (options.targetAddress ?? "").trim().toLowerCase();
+          const isMatch = target ? address.toLowerCase() === target : false;
 
           if (isMatch) {
             worker.postMessage({
@@ -163,16 +117,15 @@ worker.onmessage = (event) => {
                 address,
                 rangeStartHex: start.toString(16),
                 rangeEndHex: end.toString(16),
-                matchedKeyHex: currentCursor.toString(16),
+                privateKeyHex: keyResult.privateKeyHex || Array.from(key, (b) => b.toString(16).padStart(2, "0")).join(""),
               },
             });
             return;
           }
         }
 
-        // تحديث الـ Telemetry كل 100ms بدون إيقاف الـ Loop
         const now = performance.now();
-        if (now - lastReportAt >= 100) {
+        if (now - lastReportAt >= 150) {
           const percent =
             options.mode === "range" && rangeSize > 0n
               ? Math.min(
@@ -180,15 +133,23 @@ worker.onmessage = (event) => {
                   Number(((cursor - start) * 1_000_000n) / rangeSize) / 10_000,
                 )
               : null;
-          reportProgress(attempts, startedAt, percent);
+          worker.postMessage({
+            type: "progress",
+            attempts,
+            elapsedMs: Math.max(1, performance.now() - startedAt),
+            percent,
+          });
           lastReportAt = now;
         }
 
-        // السماح للـ Worker بإرسال الـ Messages بدون خنق الـ Core
         await new Promise<void>((resolve) => setTimeout(resolve, 0));
       }
 
-      reportEnd("stopped", attempts, startedAt);
+      worker.postMessage({
+        type: "stopped",
+        attempts,
+        elapsedMs: Math.max(1, performance.now() - startedAt),
+      });
     } catch (error) {
       worker.postMessage({
         type: "error",
