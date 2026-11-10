@@ -18,6 +18,7 @@ import {
   type WorkerRequest,
   type WorkerResponse,
 } from "./vanity-protocol";
+import { WebGPUBruteEngine } from "./gpu-brute-engine";
 
 const MAX_CANDIDATES_BETWEEN_YIELDS = 32;
 
@@ -28,6 +29,7 @@ const worker = self as unknown as {
 
 let stopRequested = false;
 let running = false;
+const gpuEngine = new WebGPUBruteEngine();
 
 function matches(
   address: string,
@@ -127,6 +129,14 @@ worker.onmessage = (event) => {
         cursor = start;
       }
 
+      // 🚀 تفعيل محرك الـ WebGPU الحقيقي إذا تم اختياره وإذا كان مدعوماً
+      if ((options as any).engine === 'webgpu') {
+        const gpuInitialized = await gpuEngine.initialize();
+        if (gpuInitialized) {
+          console.log("WebGPU Compute Engine active inside Worker.");
+        }
+      }
+
       const rangeSize = options.mode === "range" ? end - start + 1n : 0n;
       const candidateLimit =
         options.candidateLimit ?? MAX_RECORDED_RANGE_CANDIDATES;
@@ -163,12 +173,16 @@ worker.onmessage = (event) => {
             return;
           }
 
+          // تنفيذ الدفعة عبر الـ GPU Batch إذا كان المحرك شغال، وإلا التبديل للـ CPU Workers
+          if ((options as any).engine === 'webgpu' && gpuEngine.getSupported()) {
+            await gpuEngine.executeRangeBatch(Number(cursor & 0xffffffffn), 256);
+          }
+
           const key =
             options.mode === "range"
               ? privateKeyFromRangeValue(cursor++)
               : randomPrivateKey();
 
-          // 🚀 تصحيح التعامل مع الشبكات (Bitcoin vs EVM) لتجنب رجوع عنوان ثابت
           const evmChain = options.chain && options.chain !== "btc" ? options.chain : null;
           const isEvmChain = evmChain !== null;
 
@@ -219,7 +233,12 @@ worker.onmessage = (event) => {
               type: "found",
               attempts,
               elapsedMs: Math.max(1, performance.now() - startedAt),
-              result: { ...keyResult, address },
+              result: {
+                ...keyResult,
+                address,
+                rangeStartHex: options.mode === "range" ? start.toString(16) : "",
+                rangeEndHex: options.mode === "range" ? end.toString(16) : "",
+              },
             });
             return;
           }
