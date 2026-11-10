@@ -346,10 +346,27 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
         {match && (
           <div className="match-result-card" style={{ padding: '16px', background: 'hsl(var(--background))', border: '1px solid #e77732', borderRadius: '8px', marginTop: '15px' }}>
             <div className="range-lookup-label" style={{ color: '#ffbd72' }}><Sparkles size={14} style={{ display: 'inline', marginRight: 4 }} /> MATCH FOUND!</div>
+            
             <div style={{ marginTop: '8px' }}>
               <span className="range-lookup-label">Matched Address:</span>
               <code style={{ display: 'block', color: 'hsl(var(--foreground))', wordBreak: 'break-all', marginTop: '2px' }}>{match.address}</code>
             </div>
+
+            {/* 🎯 إظهار نطاق البحث (Range) فين تلاقى الماتش */}
+            <div style={{ marginTop: '10px' }}>
+              <span className="range-lookup-label">Discovered in Range:</span>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginTop: '4px', background: 'hsl(var(--card))', padding: '8px', borderRadius: '6px', border: '1px solid hsl(var(--border))' }}>
+                <div>
+                  <span style={{ fontSize: '10px', color: 'hsl(var(--muted-foreground))', display: 'block' }}>Range Start:</span>
+                  <code style={{ fontSize: '11px', color: '#ffbd72', wordBreak: 'break-all' }}>{match.rangeStartHex || startHex}</code>
+                </div>
+                <div>
+                  <span style={{ fontSize: '10px', color: 'hsl(var(--muted-foreground))', display: 'block' }}>Range End:</span>
+                  <code style={{ fontSize: '11px', color: '#ffbd72', wordBreak: 'break-all' }}>{match.rangeEndHex || endHex}</code>
+                </div>
+              </div>
+            </div>
+
             <div style={{ marginTop: '10px' }}>
               <span className="range-lookup-label">Private Key (Hex):</span>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
@@ -379,4 +396,4 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
       </footer>
     </main>
   );
-        }
+    }
