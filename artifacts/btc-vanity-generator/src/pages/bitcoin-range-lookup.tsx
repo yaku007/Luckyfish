@@ -1,7 +1,6 @@
 import { useRef, useState, useEffect, type FormEvent } from 'react';
-import { AlertCircle, Search, Zap, Cpu, Fingerprint, Eye, Copy, Sparkles, CircleAlert } from 'lucide-react';
+import { AlertCircle, Zap, Eye, Copy, Sparkles, CircleAlert } from 'lucide-react';
 import DonationAddress from '@/components/donation-address';
-import { isValidMainnetBitcoinAddress } from '@/lib/bitcoin';
 import { MULTI_CHAIN_OPTIONS, type MultiChainName } from '@/lib/multichain';
 import { saveSearchProgress, getSearchProgress } from '@/lib/persistence';
 import './bitcoin-range-lookup.css';
@@ -86,8 +85,19 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
         const message = event.data;
         const now = performance.now();
 
-        if (message.type === 'progress' || message.attempts) {
-          if (now - lastUpdateRef.current > 80 || message.type === 'found') {
+        // 🎯 تصحيح شرط الاستقبال: التمييز الدقيق بين الماتش والتحديث الدوري
+        if (message.type === 'found') {
+          const duration = Math.max(1, now - startTimeRef.current);
+          setAttempts(message.attempts || 0);
+          setElapsedMs(duration);
+          setMatch(message.result);
+          setStatus('Found');
+          setSearching(false);
+          setNotice('Target private key found successfully in range!');
+          setNoticeIsError(false);
+          worker.terminate();
+        } else if (message.type === 'progress') {
+          if (now - lastUpdateRef.current > 80) {
             const duration = Math.max(1, now - startTimeRef.current);
             const currentAttempts = message.attempts;
             const calculatedSpeed = Math.floor((currentAttempts / duration) * 1000);
@@ -103,14 +113,8 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
               chain,
               timestamp: Date.now()
             });
+            lastUpdateRef.current = now;
           }
-        } else if (message.type === 'found') {
-          setMatch(message.result);
-          setStatus('Found');
-          setSearching(false);
-          setNotice('Target private key found successfully in range!');
-          setNoticeIsError(false);
-          worker.terminate();
         } else if (message.type === 'exhausted') {
           setStatus('Exhausted');
           setSearching(false);
@@ -383,4 +387,4 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
       </footer>
     </main>
   );
-}
+  }
