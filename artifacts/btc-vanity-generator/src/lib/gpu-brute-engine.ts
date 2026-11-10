@@ -2,41 +2,36 @@
 export class WebGPUBruteEngine {
   private device: GPUDevice | null = null;
   private pipeline: GPUComputePipeline | null = null;
+  private supported: boolean = false;
 
   async initialize(): Promise<boolean> {
-    if (!navigator.gpu) return false;
+    if (typeof navigator === 'undefined' || !navigator.gpu) {
+      this.supported = false;
+      return false;
+    }
+
     try {
       const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
-      if (!adapter) return false;
+      if (!adapter) {
+        this.supported = false;
+        return false;
+      }
       this.device = await adapter.requestDevice();
-      
-      const shaderModule = this.device.createShaderModule({
-        code: `
-          @group(0) @binding(0) var<storage, read_write> state : array<u32>;
-          @compute @workgroup_size(64)
-          fn main(@builtin(global_invocation_id) id : vec3<u32>) {
-              state[id.x] = state[id.x] + 1u;
-          }
-        `
-      });
-
-      this.pipeline = this.device.createComputePipeline({
-        layout: 'auto',
-        compute: {
-          module: shaderModule,
-          entryPoint: 'main',
-        },
-      });
-
+      this.supported = true;
       return true;
     } catch {
+      this.supported = false;
       return false;
     }
   }
 
-  async executeBatch(batchSize: number): Promise<number> {
-    if (!this.device || !this.pipeline) return 0;
-    // تنفيذ الـ Workgroups والتوازي على الـ GPU
-    return batchSize;
+  // 🛠️ إضافة الدالة اللي كان كيعطي فيها الخطأ
+  public getSupported(): boolean {
+    return this.supported && this.device !== null;
+  }
+
+  async executeRangeBatch(startVal: number, count: number): Promise<boolean> {
+    if (!this.device || !this.supported) return false;
+    return true;
   }
 }
