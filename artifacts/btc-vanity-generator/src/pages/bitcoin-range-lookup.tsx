@@ -1,6 +1,7 @@
 import { useRef, useState, useEffect, type FormEvent } from 'react';
-import { AlertCircle, Zap, Eye, Copy, Sparkles, CircleAlert } from 'lucide-react';
+import { AlertCircle, Search, Zap, Cpu, Fingerprint, Eye, Copy, Sparkles, CircleAlert } from 'lucide-react';
 import DonationAddress from '@/components/donation-address';
+import { isValidMainnetBitcoinAddress } from '@/lib/bitcoin';
 import { MULTI_CHAIN_OPTIONS, type MultiChainName } from '@/lib/multichain';
 import { saveSearchProgress, getSearchProgress } from '@/lib/persistence';
 import './bitcoin-range-lookup.css';
@@ -11,7 +12,8 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
   const [chain, setChain] = useState<MultiChainName>('btc');
   const [targetAddress, setTargetAddress] = useState('');
   
-  const [engine, setEngine] = useState<'cpu' | 'webgl' | 'webgpu'>('cpu');
+  // 🚀 محركات الحوسبة الحقيقية (WebGPU, WebGL, CPU)
+  const [engine, setEngine] = useState<'cpu' | 'webgl' | 'webgpu'>('webgpu');
   const [savedCursor, setSavedCursor] = useState<string | null>(null);
 
   const [status, setStatus] = useState('Ready');
@@ -33,6 +35,7 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
     if (active) document.title = 'High-Speed Range Brute-Force | LUCKY BTC';
   }, [active]);
 
+  // استرجاع آخر نقطة وصول (State Resumption)
   useEffect(() => {
     void getSearchProgress('range_lookup_state').then((data) => {
       if (data && data.cursor) {
@@ -66,6 +69,12 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
       return;
     }
 
+    if (targetAddress.trim() && !isValidMainnetBitcoinAddress(targetAddress.trim()) && chain === 'btc') {
+      setNotice('Enter a valid mainnet Bitcoin target address.');
+      setNoticeIsError(true);
+      return;
+    }
+
     setSearching(true);
     setStatus('Running');
     setNotice('');
@@ -77,27 +86,17 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
     startTimeRef.current = performance.now();
     lastUpdateRef.current = performance.now();
 
+    // تشغيل محرك الـ Web Workers الحقيقي (مع دعم WebGPU / WebGL / CPU)
     try {
-      const worker = new Worker(new URL('../lib/vanity.worker.ts', import.meta.url), { type: 'module' });
+      const worker = new Worker(new URL('../lib/vanity-coordinator.worker.ts', import.meta.url), { type: 'module' });
       workerRef.current = worker;
 
       worker.onmessage = (event) => {
         const message = event.data;
         const now = performance.now();
 
-        // 🎯 تصحيح شرط الاستقبال: التمييز الدقيق بين الماتش والتحديث الدوري
-        if (message.type === 'found') {
-          const duration = Math.max(1, now - startTimeRef.current);
-          setAttempts(message.attempts || 0);
-          setElapsedMs(duration);
-          setMatch(message.result);
-          setStatus('Found');
-          setSearching(false);
-          setNotice('Target private key found successfully in range!');
-          setNoticeIsError(false);
-          worker.terminate();
-        } else if (message.type === 'progress') {
-          if (now - lastUpdateRef.current > 80) {
+        if (message.type === 'progress' || message.attempts) {
+          if (now - lastUpdateRef.current > 80 || message.type === 'found') {
             const duration = Math.max(1, now - startTimeRef.current);
             const currentAttempts = message.attempts;
             const calculatedSpeed = Math.floor((currentAttempts / duration) * 1000);
@@ -107,14 +106,21 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
             setKeysPerSec(message.keysPerSecond || calculatedSpeed);
             if (message.percent !== undefined) setProgressPercent(message.percent);
 
+            // حفظ التقدم دورياً في IndexedDB
             void saveSearchProgress('range_lookup_state', {
               cursor: startHex,
               targetAddress,
               chain,
               timestamp: Date.now()
             });
-            lastUpdateRef.current = now;
           }
+        } else if (message.type === 'found') {
+          setMatch(message.result);
+          setStatus('Found');
+          setSearching(false);
+          setNotice('Target private key found successfully in range!');
+          setNoticeIsError(false);
+          worker.terminate();
         } else if (message.type === 'exhausted') {
           setStatus('Exhausted');
           setSearching(false);
@@ -145,7 +151,7 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
         endHex: endHex.trim().replace(/^0x/i, ''),
         targetAddress: targetAddress.trim() || undefined,
         chain,
-        engine,
+        engine, // 👈 تمرير محرك الحاسوب الفعلي (WebGPU / WebGL / CPU)
         workerCount: typeof navigator !== 'undefined' ? (navigator.hardwareConcurrency || 8) : 8,
       });
     } catch {
@@ -176,7 +182,9 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
       <header className="range-lookup-intro">
         <div className="range-lookup-kicker"><Zap aria-hidden="true" /> Hardware-Accelerated Range Scanner</div>
         <h1>GPU Range Brute-Force (BitCrack / Kangaroo Engine)</h1>
-        <p>Scan custom private-key ranges using parallel multi-threaded compute pipelines directly in your browser.</p>
+        <p>
+          Scan custom private-key ranges using real WebGPU, WebGL, or multi-threaded CPU compute pipelines directly in your browser.
+        </p>
       </header>
 
       {savedCursor && !searching && (
@@ -203,9 +211,9 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
                 disabled={searching}
                 style={{ width: '100%', minHeight: '46px', padding: '0 13px', border: '1px solid hsl(var(--border))', borderRadius: '8px', background: 'hsl(var(--background))', color: 'hsl(var(--foreground))', fontFamily: 'var(--app-font-mono)', fontSize: '12px' }}
               >
-                <option value="cpu">CPU (Multi-threaded Workers - Highly Stable)</option>
-                <option value="webgpu">WebGPU (Ultra Fast GPU Pipeline)</option>
-                <option value="webgl">WebGL (GPU Shaders)</option>
+                <option value="webgpu">WebGPU (Ultra Fast GPU Pipeline - Recommended)</option>
+                <option value="webgl">WebGL (GPU Shader Compute)</option>
+                <option value="cpu">CPU (Multi-threaded Workers)</option>
               </select>
             </div>
           </div>
@@ -246,7 +254,7 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
                 type="text"
                 value={startHex}
                 onChange={(event) => setStartHex(event.target.value)}
-                placeholder="1"
+                placeholder="0000000000000001"
                 autoComplete="off"
                 spellCheck={false}
                 disabled={searching}
@@ -259,7 +267,7 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
                 type="text"
                 value={endHex}
                 onChange={(event) => setEndHex(event.target.value)}
-                placeholder="5000"
+                placeholder="000000000000ffff"
                 autoComplete="off"
                 spellCheck={false}
                 disabled={searching}
@@ -338,35 +346,19 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
         {match && (
           <div className="match-result-card" style={{ padding: '16px', background: 'hsl(var(--background))', border: '1px solid #e77732', borderRadius: '8px', marginTop: '15px' }}>
             <div className="range-lookup-label" style={{ color: '#ffbd72' }}><Sparkles size={14} style={{ display: 'inline', marginRight: 4 }} /> MATCH FOUND!</div>
-            
             <div style={{ marginTop: '8px' }}>
               <span className="range-lookup-label">Matched Address:</span>
               <code style={{ display: 'block', color: 'hsl(var(--foreground))', wordBreak: 'break-all', marginTop: '2px' }}>{match.address}</code>
             </div>
-
-            <div style={{ marginTop: '10px' }}>
-              <span className="range-lookup-label">Discovered in Range:</span>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginTop: '4px', background: 'hsl(var(--card))', padding: '8px', borderRadius: '6px', border: '1px solid hsl(var(--border))' }}>
-                <div>
-                  <span style={{ fontSize: '10px', color: 'hsl(var(--muted-foreground))', display: 'block' }}>Range Start:</span>
-                  <code style={{ fontSize: '11px', color: '#ffbd72', wordBreak: 'break-all' }}>{match.rangeStartHex || startHex}</code>
-                </div>
-                <div>
-                  <span style={{ fontSize: '10px', color: 'hsl(var(--muted-foreground))', display: 'block' }}>Range End:</span>
-                  <code style={{ fontSize: '11px', color: '#ffbd72', wordBreak: 'break-all' }}>{match.rangeEndHex || endHex}</code>
-                </div>
-              </div>
-            </div>
-
             <div style={{ marginTop: '10px' }}>
               <span className="range-lookup-label">Private Key (Hex):</span>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
-                <code style={{ color: 'hsl(var(--foreground))', wordBreak: 'break-all' }}>{showPrivateKey ? (match.privateKeyHex || match.privateKey) : '••••••••••••••••••••••••••••••••••••'}</code>
+                <code style={{ color: 'hsl(var(--foreground))', wordBreak: 'break-all' }}>{showPrivateKey ? match.privateKeyHex : '••••••••••••••••••••••••••••••••••••'}</code>
                 <button className="range-lookup-search" type="button" onClick={() => setShowPrivateKey(!showPrivateKey)} style={{ padding: '4px 8px', minHeight: '30px', fontSize: '11px' }}>
                   <Eye size={12} /> {showPrivateKey ? 'Hide' : 'Reveal'}
                 </button>
                 {showPrivateKey && (
-                  <button className="range-lookup-search" type="button" onClick={() => copyValue(match.privateKeyHex || match.privateKey)} style={{ padding: '4px 8px', minHeight: '30px', fontSize: '11px' }}>
+                  <button className="range-lookup-search" type="button" onClick={() => copyValue(match.privateKeyHex)} style={{ padding: '4px 8px', minHeight: '30px', fontSize: '11px' }}>
                     <Copy size={12} /> Copy
                   </button>
                 )}
@@ -387,4 +379,4 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
       </footer>
     </main>
   );
-  }
+        }
