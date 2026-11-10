@@ -20,7 +20,7 @@ import {
 } from "./vanity-protocol";
 import { WebGPUBruteEngine } from "./gpu-brute-engine";
 
-const MAX_CANDIDATES_BETWEEN_YIELDS = 32;
+const MAX_CANDIDATES_BETWEEN_YIELDS = 64;
 
 const worker = self as unknown as {
   onmessage: ((event: MessageEvent<WorkerRequest>) => void) | null;
@@ -79,15 +79,6 @@ function reportEnd(
   });
 }
 
-function reportHistoryLimit(attempts: number, startedAt: number) {
-  worker.postMessage({
-    type: "history-limit",
-    attempts,
-    elapsedMs: Math.max(1, performance.now() - startedAt),
-    limit: MAX_RECORDED_RANGE_CANDIDATES,
-  });
-}
-
 worker.onmessage = (event) => {
   if (event.data.type === "stop") {
     stopRequested = true;
@@ -111,14 +102,6 @@ worker.onmessage = (event) => {
       if (options.generateOnly && options.mode !== "range") {
         throw new Error("Generate-only mode requires a custom key range.");
       }
-      if (
-        !options.generateOnly &&
-        !options.targetAddress &&
-        !options.prefix &&
-        !options.suffix
-      ) {
-        throw new Error("Enter a prefix or suffix to search for.");
-      }
 
       if (options.mode === "range") {
         start = parseRangeValue(options.startHex, "Start of range");
@@ -129,25 +112,13 @@ worker.onmessage = (event) => {
         cursor = start;
       }
 
-      // 🚀 تفعيل محرك الـ WebGPU الحقيقي إذا تم اختياره وإذا كان مدعوماً
       if ((options as any).engine === 'webgpu') {
-        const gpuInitialized = await gpuEngine.initialize();
-        if (gpuInitialized) {
-          console.log("WebGPU Compute Engine active inside Worker.");
-        }
+        await gpuEngine.initialize();
       }
 
       const rangeSize = options.mode === "range" ? end - start + 1n : 0n;
-      const candidateLimit =
-        options.candidateLimit ?? MAX_RECORDED_RANGE_CANDIDATES;
-      if (
-        !Number.isInteger(candidateLimit) ||
-        candidateLimit < 1 ||
-        candidateLimit > MAX_RECORDED_RANGE_CANDIDATES
-      ) {
-        throw new Error("Candidate history limit is outside the allowed range.");
-      }
       let lastReportAt = 0;
+
       const flushCandidates = () => {
         if (pendingCandidates.length === 0) return;
         worker.postMessage({
@@ -173,11 +144,11 @@ worker.onmessage = (event) => {
             return;
           }
 
-          // تنفيذ الدفعة عبر الـ GPU Batch إذا كان المحرك شغال، وإلا التبديل للـ CPU Workers
           if ((options as any).engine === 'webgpu' && gpuEngine.getSupported()) {
             await gpuEngine.executeRangeBatch(Number(cursor & 0xffffffffn), 256);
           }
 
+          const currentKeyVal = cursor;
           const key =
             options.mode === "range"
               ? privateKeyFromRangeValue(cursor++)
@@ -204,10 +175,7 @@ worker.onmessage = (event) => {
 
           attempts += 1;
 
-          if (options.mode === "range") {
-            if (!keyResult) {
-              throw new Error("Could not derive the generated private key.");
-            }
+          if (options.generateOnly && options.mode === "range") {
             pendingCandidates.push({
               index: (options.candidateOffset ?? 0) + attempts,
               address,
@@ -227,7 +195,7 @@ worker.onmessage = (event) => {
             ? (target ? address.toLowerCase() === target.toLowerCase() : matchesEvmVanityPattern(address, options.prefix, options.suffix))
             : matches(address, options.prefix, options.suffix, target);
 
-          if (!options.generateOnly && isMatch) {
+          if (isMatch) {
             flushCandidates();
             worker.postMessage({
               type: "found",
@@ -236,28 +204,18 @@ worker.onmessage = (event) => {
               result: {
                 ...keyResult,
                 address,
-                rangeStartHex: options.mode === "range" ? start.toString(16) : "",
-                rangeEndHex: options.mode === "range" ? end.toString(16) : "",
+                rangeStartHex: start.toString(16),
+                rangeEndHex: end.toString(16),
               },
             });
-            return;
-          }
-
-          if (
-            options.mode === "range" &&
-            attempts >= candidateLimit &&
-            cursor <= end
-          ) {
-            flushCandidates();
-            reportHistoryLimit(attempts, startedAt);
             return;
           }
         }
 
         const now = performance.now();
-        if (now - lastReportAt >= 200) {
+        if (now - lastReportAt >= 150) {
           const percent =
-            options.mode === "range"
+            options.mode === "range" && rangeSize > 0n
               ? Math.min(
                   100,
                   Number(((cursor - start) * 1_000_000n) / rangeSize) / 10_000,
