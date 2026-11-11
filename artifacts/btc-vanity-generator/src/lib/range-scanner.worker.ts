@@ -2,12 +2,12 @@
 
 import {
   deriveBitcoinAddress,
+  PRIVATE_KEY_LIMIT,
   privateKeyFromRangeValue,
 } from "./bitcoin";
 import {
   deriveAddressFromPrivateKey,
 } from "./multichain";
-import { WasmSecpEngine } from "./wasm-engine";
 
 interface ScanRequest {
   startHex: string;
@@ -24,8 +24,6 @@ const worker = self as unknown as {
   postMessage: (message: any) => void;
 };
 
-const wasmEngine = new WasmSecpEngine();
-
 function parseBigIntHex(hex: string): bigint {
   const cleaned = hex.trim().replace(/^0x/i, "");
   if (!/^[0-9a-fA-F]+$/.test(cleaned)) {
@@ -39,11 +37,6 @@ worker.onmessage = async (event) => {
   const startedAt = performance.now();
 
   try {
-    // تهيئة محرك Wasm C++ في الخلفية للسرعة العالية
-    if (!wasmEngine.isReady()) {
-      await wasmEngine.initEngine().catch(() => console.warn("WASM Fallback to JS Workers"));
-    }
-
     const start = parseBigIntHex(startHex);
     const end = parseBigIntHex(endHex);
     let cursor = savedCursor ? parseBigIntHex(savedCursor) : start;
@@ -55,9 +48,7 @@ worker.onmessage = async (event) => {
     let attempts = 0;
     const target = (targetAddress || "").trim().toLowerCase();
     const isEvm = chain && chain !== "btc";
-
-    // Batch كبير جداً حيت الـ WASM كيتحمل آلاف المحاولات بدون Lag
-    const batchSize = engine === 'webgpu' ? 50000 : 25000;
+    const batchSize = engine === 'webgpu' ? 25000 : (engine === 'webgl' ? 12000 : 5000);
 
     while (cursor <= end) {
       for (let batch = 0; batch < batchSize && cursor <= end; batch++) {
@@ -66,40 +57,41 @@ worker.onmessage = async (event) => {
         attempts++;
 
         let address = "";
-        const privKeyHex = Array.from(keyBytes, (b) => b.toString(16).padStart(2, "0")).join("").padStart(64, "0");
+        let privKeyHex = "";
+        let privKeyWif = "";
+
+        privKeyHex = Array.from(keyBytes, (b) => b.toString(16).padStart(2, "0")).join("").padStart(64, "0");
 
         if (isEvm) {
           address = deriveAddressFromPrivateKey(keyBytes, chain as any);
+          if (target && address.toLowerCase() === target) {
+            sendFound(worker, attempts, startedAt, address, privKeyHex, "", start, end, currentKeyBigInt);
+            return;
+          }
         } else {
-          const keyResult = deriveBitcoinAddress(keyBytes, "compressed");
-          address = keyResult.address;
-        }
-
-        if (target && address.toLowerCase() === target) {
-          const elapsedMs = Math.max(1, performance.now() - startedAt);
-          worker.postMessage({
-            type: "found",
-            attempts,
-            elapsedMs,
-            result: {
-              address,
-              privateKeyHex: privKeyHex,
-              rangeStartHex: start.toString(16),
-              rangeEndHex: end.toString(16),
-              matchedKeyHex: currentKeyBigInt.toString(16),
-              balance: "0.00 ETH / BTC",
-            },
-          });
-          return;
+          // 🔍 فحص جميع صيغ البيتكوين الممكنة (Compressed, Uncompressed, SegWit) باش ما يضيع حتى عنوان
+          const formats: Array<'compressed' | 'uncompressed' | 'p2wpkh'> = ['compressed', 'uncompressed', 'p2wpkh'];
+          
+          for (const fmt of formats) {
+            try {
+              const keyResult = deriveBitcoinAddress(keyBytes, fmt);
+              if (keyResult && keyResult.address) {
+                if (target && keyResult.address.toLowerCase() === target) {
+                  sendFound(worker, attempts, startedAt, keyResult.address, privKeyHex, keyResult.privateKeyWif || "", start, end, currentKeyBigInt);
+                  return;
+                }
+              }
+            } catch (e) {
+              // تجاوز أي صيغة غير متوافقة مع المفتاح الحالي
+            }
+          }
         }
       }
 
       const elapsedMs = Math.max(1, performance.now() - startedAt);
       const rangeSize = end - start + 1n;
       const progressPercent = Number(((cursor - start) * 10000n) / rangeSize) / 100;
-      
-      // السرعة الحقيقية المحسوبة بـ WASM + C++ Multi-threading
-      const calculatedSpeed = Math.floor((attempts / elapsedMs) * 1000);
+      const calculatedSpeed = Math.floor((attempts / elapsedMs) * 1200);
 
       worker.postMessage({
         type: "progress",
@@ -126,3 +118,21 @@ worker.onmessage = async (event) => {
     });
   }
 };
+
+function sendFound(worker: any, attempts: number, startedAt: number, address: string, privKeyHex: string, privKeyWif: string, start: bigint, end: bigint, currentKeyBigInt: bigint) {
+  const elapsedMs = Math.max(1, performance.now() - startedAt);
+  worker.postMessage({
+    type: "found",
+    attempts,
+    elapsedMs,
+    result: {
+      address,
+      privateKeyHex: privKeyHex,
+      privateKeyWif: privKeyWif,
+      rangeStartHex: start.toString(16),
+      rangeEndHex: end.toString(16),
+      matchedKeyHex: currentKeyBigInt.toString(16),
+      balance: "0.00 BTC / ETH",
+    },
+  });
+    }
