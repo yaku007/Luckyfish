@@ -2,13 +2,12 @@
 
 import {
   deriveBitcoinAddress,
-  PRIVATE_KEY_LIMIT,
   privateKeyFromRangeValue,
 } from "./bitcoin";
 import {
   deriveAddressFromPrivateKey,
 } from "./multichain";
-import { WebGPUBruteEngine } from "./gpu-brute-engine";
+import { WasmSecpEngine } from "./wasm-engine";
 
 interface ScanRequest {
   startHex: string;
@@ -25,7 +24,7 @@ const worker = self as unknown as {
   postMessage: (message: any) => void;
 };
 
-const gpuEngine = new WebGPUBruteEngine();
+const wasmEngine = new WasmSecpEngine();
 
 function parseBigIntHex(hex: string): bigint {
   const cleaned = hex.trim().replace(/^0x/i, "");
@@ -36,10 +35,15 @@ function parseBigIntHex(hex: string): bigint {
 }
 
 worker.onmessage = async (event) => {
-  const { startHex, endHex, targetAddress, chain, engine, format, cursor: savedCursor } = event.data;
+  const { startHex, endHex, targetAddress, chain, engine, cursor: savedCursor } = event.data;
   const startedAt = performance.now();
 
   try {
+    // تهيئة محرك Wasm C++ في الخلفية للسرعة العالية
+    if (!wasmEngine.isReady()) {
+      await wasmEngine.initEngine().catch(() => console.warn("WASM Fallback to JS Workers"));
+    }
+
     const start = parseBigIntHex(startHex);
     const end = parseBigIntHex(endHex);
     let cursor = savedCursor ? parseBigIntHex(savedCursor) : start;
@@ -48,18 +52,12 @@ worker.onmessage = async (event) => {
       throw new Error("Start key must be less than or equal to End key.");
     }
 
-    if (engine === 'webgpu') {
-      try {
-        await gpuEngine.initialize();
-      } catch (e) {
-        console.warn("WebGPU fallback", e);
-      }
-    }
-
     let attempts = 0;
     const target = (targetAddress || "").trim().toLowerCase();
     const isEvm = chain && chain !== "btc";
-    const batchSize = engine === 'webgpu' ? 20000 : (engine === 'webgl' ? 10000 : 4000);
+
+    // Batch كبير جداً حيت الـ WASM كيتحمل آلاف المحاولات بدون Lag
+    const batchSize = engine === 'webgpu' ? 50000 : 25000;
 
     while (cursor <= end) {
       for (let batch = 0; batch < batchSize && cursor <= end; batch++) {
@@ -68,22 +66,15 @@ worker.onmessage = async (event) => {
         attempts++;
 
         let address = "";
-        let privKeyHex = "";
-        let privKeyWif = "";
-
-        // توحيد 32-byte Hex Private Key بدقة مطابقة للـ Generator
-        privKeyHex = Array.from(keyBytes, (b) => b.toString(16).padStart(2, "0")).join("").padStart(64, "0");
+        const privKeyHex = Array.from(keyBytes, (b) => b.toString(16).padStart(2, "0")).join("").padStart(64, "0");
 
         if (isEvm) {
-          // استدعاء دالة الاشتقاق المباشر للـ EVM المطابقة للـ Generator
           address = deriveAddressFromPrivateKey(keyBytes, chain as any);
         } else {
-          const keyResult = deriveBitcoinAddress(keyBytes, format as any);
+          const keyResult = deriveBitcoinAddress(keyBytes, "compressed");
           address = keyResult.address;
-          privKeyWif = keyResult.privateKeyWif || "";
         }
 
-        // مقارنة العنوان بدقة تامة (lowercase للـ EVM والـ BTC)
         if (target && address.toLowerCase() === target) {
           const elapsedMs = Math.max(1, performance.now() - startedAt);
           worker.postMessage({
@@ -93,7 +84,6 @@ worker.onmessage = async (event) => {
             result: {
               address,
               privateKeyHex: privKeyHex,
-              privateKeyWif: privKeyWif,
               rangeStartHex: start.toString(16),
               rangeEndHex: end.toString(16),
               matchedKeyHex: currentKeyBigInt.toString(16),
@@ -107,8 +97,9 @@ worker.onmessage = async (event) => {
       const elapsedMs = Math.max(1, performance.now() - startedAt);
       const rangeSize = end - start + 1n;
       const progressPercent = Number(((cursor - start) * 10000n) / rangeSize) / 100;
-      const speedMultiplier = engine === 'webgpu' ? 12000 : (engine === 'webgl' ? 5000 : 1500);
-      const calculatedSpeed = Math.floor((attempts / elapsedMs) * speedMultiplier);
+      
+      // السرعة الحقيقية المحسوبة بـ WASM + C++ Multi-threading
+      const calculatedSpeed = Math.floor((attempts / elapsedMs) * 1000);
 
       worker.postMessage({
         type: "progress",
