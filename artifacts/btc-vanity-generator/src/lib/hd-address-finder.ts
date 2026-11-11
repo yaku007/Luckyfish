@@ -112,7 +112,7 @@ export async function findHdAddressByXpub({
 
     let child: HDKey;
     try {
-      child = master.derive(chain === 'btc' ? `m/0/0/${index}` : `m/0/${index}`);
+      child = master.derive(`m/0/${index}`);
     } catch {
       throw new Error(`Could not derive address index ${index}.`);
     }
@@ -124,7 +124,10 @@ export async function findHdAddressByXpub({
     const address = chain === 'btc'
       ? legacyAddressFromPublicKey(child.publicKey)
       : publicKeyToEvmAddress(child.publicKey);
-    if (address === normalizedTarget) {
+    const matchesTarget = chain === 'btc'
+      ? address === normalizedTarget
+      : address.toLowerCase() === normalizedTarget.toLowerCase();
+    if (matchesTarget) {
       return { index, address };
     }
 

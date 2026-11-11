@@ -1,5 +1,6 @@
 import { HDKey } from '@scure/bip32';
 import { describe, expect, it, vi } from 'vitest';
+import { deriveBitcoinAddress } from './bitcoin';
 import {
   CHAIN_RPC_URLS,
   deriveAddressFromPrivateKey,
@@ -159,7 +160,7 @@ describe('multichain wallet helpers', () => {
     expect(ethAddress).not.toBe(polygonAddress);
   });
 
-  it('matches an EVM address using an account-level xpub and index range', async () => {
+  it('matches an EVM address without requiring checksum casing', async () => {
     const master = HDKey.fromMasterSeed(new Uint8Array(32).fill(7));
     const accountXpub = master.derive("m/44'/60'/0'").publicExtendedKey;
     const expectedAddress = getMultiChainAddressFromHdKey(master, 'eth', 7);
@@ -168,8 +169,24 @@ describe('multichain wallet helpers', () => {
       xpub: accountXpub,
       startIndex: 5,
       endIndex: 9,
-      targetAddress: expectedAddress,
+      targetAddress: `0x${expectedAddress.slice(2).toUpperCase()}`,
       chain: 'eth',
+    })).resolves.toEqual({ index: 7, address: expectedAddress });
+  });
+
+  it('matches a Legacy Bitcoin address from an account-level xpub', async () => {
+    const master = HDKey.fromMasterSeed(new Uint8Array(32).fill(9));
+    const accountXpub = master.derive("m/44'/0'/0'").publicExtendedKey;
+    const privateKey = master.derive("m/44'/0'/0'/0/7").privateKey;
+    if (!privateKey) throw new Error('Expected the test account to have a private key.');
+    const expectedAddress = deriveBitcoinAddress(privateKey, 'legacy').address;
+
+    await expect(findHdAddressByXpub({
+      xpub: accountXpub,
+      startIndex: 5,
+      endIndex: 9,
+      targetAddress: expectedAddress,
+      chain: 'btc',
     })).resolves.toEqual({ index: 7, address: expectedAddress });
   });
 
