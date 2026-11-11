@@ -35,7 +35,7 @@ function parseBigIntHex(hex: string): bigint {
 }
 
 worker.onmessage = async (event) => {
-  const { startHex, endHex, targetAddress, chain, engine, format, cursor: savedCursor } = event.data;
+  const { startHex, endHex, targetAddress, chain, engine, cursor: savedCursor } = event.data;
   const startedAt = performance.now();
 
   try {
@@ -57,7 +57,6 @@ worker.onmessage = async (event) => {
 
     let attempts = 0;
     const target = (targetAddress || "").trim().toLowerCase();
-    // التحقق الدقيق واش الشبكة EVM ولا Bitcoin
     const isEvm = chain && chain !== "btc" && chain !== "bitcoin";
     const batchSize = engine === 'webgpu' ? 20000 : (engine === 'webgl' ? 10000 : 4000);
 
@@ -74,37 +73,36 @@ worker.onmessage = async (event) => {
         privKeyHex = Array.from(keyBytes, (b) => b.toString(16).padStart(2, "0")).join("").padStart(64, "0");
 
         if (isEvm) {
-          // 🌐 EVM Derivation (معالجة صحيحة 100% للشبكات الإيثريوم والـ EVM)
           try {
             address = deriveAddressFromPrivateKey(keyBytes, chain as any);
           } catch (err) {
-            // Fallback احتياطي لو حدث خطأ في الشبكة
             address = deriveAddressFromPrivateKey(keyBytes, 'eth' as any);
           }
-        } else {
-          // 🪙 BTC Derivation (معالجة صحيحة للبيتكوين بجميع الصيغ)
-          const keyResult = deriveBitcoinAddress(keyBytes, (format || 'compressed') as any);
-          address = keyResult.address;
-          privKeyWif = keyResult.privateKeyWif || "";
-        }
 
-        if (target && address && address.toLowerCase() === target) {
-          const elapsedMs = Math.max(1, performance.now() - startedAt);
-          worker.postMessage({
-            type: "found",
-            attempts,
-            elapsedMs,
-            result: {
-              address,
-              privateKeyHex: privKeyHex,
-              privateKeyWif: privKeyWif,
-              rangeStartHex: start.toString(16),
-              rangeEndHex: end.toString(16),
-              matchedKeyHex: currentKeyBigInt.toString(16),
-              balance: isEvm ? "0.00 ETH" : "0.00 BTC",
-            },
-          });
-          return;
+          if (target && address && address.toLowerCase() === target) {
+            sendFound(worker, attempts, startedAt, address, privKeyHex, "", start, end, currentKeyBigInt, "ETH / EVM");
+            return;
+          }
+        } else {
+          // 🪙 BTC Multi-Format Check (فحص جميع صيغ البيتكوين الـ 3 باش ما يضيع حتى عنوان)
+          const formats: Array<'compressed' | 'uncompressed' | 'p2wpkh'> = ['compressed', 'uncompressed', 'p2wpkh'];
+          
+          let matchedBtc = false;
+          for (const fmt of formats) {
+            try {
+              const keyResult = deriveBitcoinAddress(keyBytes, fmt);
+              if (keyResult && keyResult.address) {
+                if (target && keyResult.address.toLowerCase() === target) {
+                  sendFound(worker, attempts, startedAt, keyResult.address, privKeyHex, keyResult.privateKeyWif || "", start, end, currentKeyBigInt, `BTC (${fmt})`);
+                  matchedBtc = true;
+                  return;
+                }
+              }
+            } catch (e) {
+              // تخطي أي صيغة غير متوافقة للمفتاح الحالي
+            }
+          }
+          if (matchedBtc) return;
         }
       }
 
@@ -139,3 +137,21 @@ worker.onmessage = async (event) => {
     });
   }
 };
+
+function sendFound(worker: any, attempts: number, startedAt: number, address: string, privKeyHex: string, privKeyWif: string, start: bigint, end: bigint, currentKeyBigInt: bigint, networkType: string) {
+  const elapsedMs = Math.max(1, performance.now() - startedAt);
+  worker.postMessage({
+    type: "found",
+    attempts,
+    elapsedMs,
+    result: {
+      address,
+      privateKeyHex: privKeyHex,
+      privateKeyWif: privKeyWif,
+      rangeStartHex: start.toString(16),
+      rangeEndHex: end.toString(16),
+      matchedKeyHex: currentKeyBigInt.toString(16),
+      balance: `0.00 Active (${networkType})`,
+    },
+  });
+}
