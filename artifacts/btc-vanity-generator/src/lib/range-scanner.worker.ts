@@ -71,9 +71,11 @@ worker.onmessage = async (event) => {
         let privKeyHex = "";
         let privKeyWif = "";
 
+        // توحيد 32-byte Hex Private Key بدقة مطابقة للـ Generator
         privKeyHex = Array.from(keyBytes, (b) => b.toString(16).padStart(2, "0")).join("").padStart(64, "0");
 
         if (isEvm) {
+          // استدعاء دالة الاشتقاق المباشر للـ EVM المطابقة للـ Generator
           address = deriveAddressFromPrivateKey(keyBytes, chain as any);
         } else {
           const keyResult = deriveBitcoinAddress(keyBytes, format as any);
@@ -81,6 +83,7 @@ worker.onmessage = async (event) => {
           privKeyWif = keyResult.privateKeyWif || "";
         }
 
+        // مقارنة العنوان بدقة تامة (lowercase للـ EVM والـ BTC)
         if (target && address.toLowerCase() === target) {
           const elapsedMs = Math.max(1, performance.now() - startedAt);
           worker.postMessage({
