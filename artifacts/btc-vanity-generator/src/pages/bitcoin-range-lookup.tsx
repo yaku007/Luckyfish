@@ -1,7 +1,8 @@
 import { useRef, useState, useEffect, type FormEvent } from 'react';
-import { Zap, Eye, Copy, Sparkles, CircleAlert } from 'lucide-react';
+import { Zap, Eye, Copy, Sparkles } from 'lucide-react';
 import DonationAddress from '@/components/donation-address';
 import { MULTI_CHAIN_OPTIONS, type MultiChainName } from '@/lib/multichain';
+import { saveSearchProgress, getSearchProgress } from '@/lib/persistence';
 import './bitcoin-range-lookup.css';
 
 export default function BitcoinRangeLookupPage({ active }: { active: boolean }) {
@@ -10,6 +11,7 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
   const [chain, setChain] = useState<MultiChainName>('eth');
   const [targetAddress, setTargetAddress] = useState('');
   const [engine, setEngine] = useState<'cpu' | 'webgl' | 'webgpu'>('webgpu');
+  const [savedCursor, setSavedCursor] = useState<string | null>(null);
 
   const [status, setStatus] = useState('Ready');
   const [attempts, setAttempts] = useState(0);
@@ -25,6 +27,13 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
 
   useEffect(() => {
     if (active) document.title = 'Isolated Hardware Range Scanner | LUCKY BTC';
+    void getSearchProgress('range_lookup_state').then((data) => {
+      if (data && data.cursor) {
+        setSavedCursor(data.cursor);
+        if (data.targetAddress) setTargetAddress(data.targetAddress);
+        if (data.chain) setChain(data.chain);
+      }
+    });
   }, [active]);
 
   const copyValue = async (value: string) => {
@@ -36,7 +45,15 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
     }
   };
 
-  function handleSearch(event: FormEvent<HTMLFormElement>) {
+  function handleResume() {
+    if (savedCursor) {
+      setStartHex(savedCursor);
+      setNotice('Resumed from previous cursor state.');
+      setSavedCursor(null);
+    }
+  }
+
+  function handleSearch(event: FormEvent<HTMLFormElement>, resumeKey?: string) {
     event.preventDefault();
     if (searching) {
       workerRef.current?.terminate();
@@ -57,7 +74,7 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
     setMatch(null);
     setAttempts(0);
     setKeysPerSec(0);
-    setCurrentKey(startHex);
+    setCurrentKey(resumeKey || startHex);
     setProgressPercent(0);
 
     try {
@@ -79,6 +96,13 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
           setKeysPerSec(message.speed || 0);
           setCurrentKey(message.currentKeyHex || '');
           if (message.percent !== undefined) setProgressPercent(message.percent);
+
+          void saveSearchProgress('range_lookup_state', {
+            cursor: message.currentKeyHex,
+            targetAddress,
+            chain,
+            timestamp: Date.now()
+          });
         } else if (message.type === 'exhausted') {
           setStatus('Exhausted');
           setSearching(false);
@@ -100,11 +124,12 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
       };
 
       worker.postMessage({
-        startHex: startHex.trim().replace(/^0x/i, ''),
+        startHex: (resumeKey || startHex).trim().replace(/^0x/i, ''),
         endHex: endHex.trim().replace(/^0x/i, ''),
         targetAddress: targetAddress.trim(),
         chain,
         engine,
+        cursor: resumeKey || undefined,
       });
     } catch {
       setStatus('Error');
@@ -122,16 +147,25 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
   return (
     <main className="range-lookup-page" data-testid="page-bitcoin-range-lookup">
       <header className="range-lookup-intro">
-        <div className="range-lookup-kicker"><Zap aria-hidden="true" /> Isolated Hardware Engine</div>
+        <div className="range-lookup-kicker"><Zap aria-hidden="true" /> WebGPU / WebGL Engine</div>
         <h1>BitCrack &amp; Kangaroo Range Brute-Force</h1>
-        <p>Direct cryptographic key space scanner with real hardware acceleration support.</p>
+        <p>Direct cryptographic key space scanner with persistence and hardware acceleration.</p>
       </header>
+
+      {savedCursor && !searching && (
+        <div style={{ background: '#24170e', border: '1px solid #65401f', padding: '12px 16px', borderRadius: '10px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ color: '#f3c89c', fontSize: '12px' }}>Found previous saved scanning session. Do you want to resume?</span>
+          <button onClick={handleResume} style={{ background: '#f7931a', color: '#14100a', border: 0, padding: '6px 12px', borderRadius: '6px', fontWeight: 700, fontSize: '11px', cursor: 'pointer' }}>
+            Resume State ({savedCursor.slice(0, 8)}...)
+          </button>
+        </div>
+      )}
 
       <section className="range-lookup-panel">
         <p className="range-lookup-label">CONFIG</p>
         <h2>Scan Parameters</h2>
 
-        <form onSubmit={handleSearch}>
+        <form onSubmit={(e) => handleSearch(e)}>
           <div className="range-lookup-field" style={{ marginTop: '10px' }}>
             <span>Compute Engine</span>
             <select
@@ -246,7 +280,7 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
 
           <div style={{ fontSize: '12px', marginBottom: '6px' }}>
             <span style={{ color: 'hsl(var(--muted-foreground))' }}>Balance:</span>
-            <span style={{ color: '#4ade80', fontWeight: 700, marginLeft: '6px' }}>{match.balance} ETH / BTC</span>
+            <span style={{ color: '#4ade80', fontWeight: 700, marginLeft: '6px' }}>{match.balance}</span>
           </div>
 
           <div style={{ fontSize: '12px', marginBottom: '6px' }}>
@@ -276,4 +310,4 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
       </footer>
     </main>
   );
-                                       }
+      }
