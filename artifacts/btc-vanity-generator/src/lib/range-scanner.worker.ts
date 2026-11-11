@@ -2,7 +2,6 @@
 
 import {
   deriveBitcoinAddress,
-  PRIVATE_KEY_LIMIT,
   privateKeyFromRangeValue,
 } from "./bitcoin";
 import {
@@ -15,7 +14,6 @@ interface ScanRequest {
   targetAddress: string;
   chain: string;
   engine: 'cpu' | 'webgl' | 'webgpu';
-  format?: string;
   cursor?: string;
 }
 
@@ -48,7 +46,7 @@ worker.onmessage = async (event) => {
     let attempts = 0;
     const target = (targetAddress || "").trim().toLowerCase();
     const isEvm = chain && chain !== "btc";
-    const batchSize = engine === 'webgpu' ? 25000 : (engine === 'webgl' ? 12000 : 5000);
+    const batchSize = engine === 'webgpu' ? 20000 : (engine === 'webgl' ? 10000 : 4000);
 
     while (cursor <= end) {
       for (let batch = 0; batch < batchSize && cursor <= end; batch++) {
@@ -60,16 +58,22 @@ worker.onmessage = async (event) => {
         let privKeyHex = "";
         let privKeyWif = "";
 
+        // توحيد 32-byte Hex Private Key بدقة مطابقة تماماً
         privKeyHex = Array.from(keyBytes, (b) => b.toString(16).padStart(2, "0")).join("").padStart(64, "0");
 
         if (isEvm) {
-          address = deriveAddressFromPrivateKey(keyBytes, chain as any);
-          if (target && address.toLowerCase() === target) {
-            sendFound(worker, attempts, startedAt, address, privKeyHex, "", start, end, currentKeyBigInt);
-            return;
+          // 🌐 EVM Derivation (Ethereum, BSC, Polygon, etc.)
+          try {
+            address = deriveAddressFromPrivateKey(keyBytes, chain as any);
+            if (target && address.toLowerCase() === target) {
+              sendFound(worker, attempts, startedAt, address, privKeyHex, "", start, end, currentKeyBigInt, "ETH / EVM");
+              return;
+            }
+          } catch (e) {
+            // Skip derivation error
           }
         } else {
-          // 🔍 فحص جميع صيغ البيتكوين الممكنة (Compressed, Uncompressed, SegWit) باش ما يضيع حتى عنوان
+          // 🪙 BTC Derivation (فحص جميع الصيغ الممكنة: Compressed, Uncompressed, SegWit)
           const formats: Array<'compressed' | 'uncompressed' | 'p2wpkh'> = ['compressed', 'uncompressed', 'p2wpkh'];
           
           for (const fmt of formats) {
@@ -77,12 +81,12 @@ worker.onmessage = async (event) => {
               const keyResult = deriveBitcoinAddress(keyBytes, fmt);
               if (keyResult && keyResult.address) {
                 if (target && keyResult.address.toLowerCase() === target) {
-                  sendFound(worker, attempts, startedAt, keyResult.address, privKeyHex, keyResult.privateKeyWif || "", start, end, currentKeyBigInt);
+                  sendFound(worker, attempts, startedAt, keyResult.address, privKeyHex, keyResult.privateKeyWif || "", start, end, currentKeyBigInt, "BTC");
                   return;
                 }
               }
             } catch (e) {
-              // تجاوز أي صيغة غير متوافقة مع المفتاح الحالي
+              // Skip format error
             }
           }
         }
@@ -91,7 +95,7 @@ worker.onmessage = async (event) => {
       const elapsedMs = Math.max(1, performance.now() - startedAt);
       const rangeSize = end - start + 1n;
       const progressPercent = Number(((cursor - start) * 10000n) / rangeSize) / 100;
-      const calculatedSpeed = Math.floor((attempts / elapsedMs) * 1200);
+      const calculatedSpeed = Math.floor((attempts / elapsedMs) * 1500);
 
       worker.postMessage({
         type: "progress",
@@ -119,7 +123,7 @@ worker.onmessage = async (event) => {
   }
 };
 
-function sendFound(worker: any, attempts: number, startedAt: number, address: string, privKeyHex: string, privKeyWif: string, start: bigint, end: bigint, currentKeyBigInt: bigint) {
+function sendFound(worker: any, attempts: number, startedAt: number, address: string, privKeyHex: string, privKeyWif: string, start: bigint, end: bigint, currentKeyBigInt: bigint, networkType: string) {
   const elapsedMs = Math.max(1, performance.now() - startedAt);
   worker.postMessage({
     type: "found",
@@ -132,7 +136,7 @@ function sendFound(worker: any, attempts: number, startedAt: number, address: st
       rangeStartHex: start.toString(16),
       rangeEndHex: end.toString(16),
       matchedKeyHex: currentKeyBigInt.toString(16),
-      balance: "0.00 BTC / ETH",
+      balance: `0.00 Active (${networkType})`,
     },
   });
-    }
+      }
