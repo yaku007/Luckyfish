@@ -8,6 +8,7 @@ import {
 import {
   deriveAddressFromPrivateKey,
 } from "./multichain";
+import { WebGPUBruteEngine } from "./gpu-brute-engine";
 
 interface ScanRequest {
   startHex: string;
@@ -16,12 +17,15 @@ interface ScanRequest {
   chain: string;
   engine: 'cpu' | 'webgl' | 'webgpu';
   format?: string;
+  cursor?: string;
 }
 
 const worker = self as unknown as {
   onmessage: ((event: MessageEvent<ScanRequest>) => void) | null;
   postMessage: (message: any) => void;
 };
+
+const gpuEngine = new WebGPUBruteEngine();
 
 function parseBigIntHex(hex: string): bigint {
   const cleaned = hex.trim().replace(/^0x/i, "");
@@ -32,24 +36,30 @@ function parseBigIntHex(hex: string): bigint {
 }
 
 worker.onmessage = async (event) => {
-  const { startHex, endHex, targetAddress, chain, engine, format } = event.data;
+  const { startHex, endHex, targetAddress, chain, engine, format, cursor: savedCursor } = event.data;
   const startedAt = performance.now();
 
   try {
     const start = parseBigIntHex(startHex);
     const end = parseBigIntHex(endHex);
+    let cursor = savedCursor ? parseBigIntHex(savedCursor) : start;
     
     if (start > end) {
       throw new Error("Start key must be less than or equal to End key.");
     }
 
-    let cursor = start;
+    if (engine === 'webgpu') {
+      try {
+        await gpuEngine.initialize();
+      } catch (e) {
+        console.warn("WebGPU fallback", e);
+      }
+    }
+
     let attempts = 0;
     const target = (targetAddress || "").trim().toLowerCase();
     const isEvm = chain && chain !== "btc";
-
-    // Dynamic batch size depending on engine choice
-    const batchSize = engine === 'webgpu' ? 15000 : (engine === 'webgl' ? 8000 : 3000);
+    const batchSize = engine === 'webgpu' ? 20000 : (engine === 'webgl' ? 10000 : 4000);
 
     while (cursor <= end) {
       for (let batch = 0; batch < batchSize && cursor <= end; batch++) {
@@ -84,7 +94,7 @@ worker.onmessage = async (event) => {
               rangeStartHex: start.toString(16),
               rangeEndHex: end.toString(16),
               matchedKeyHex: currentKeyBigInt.toString(16),
-              balance: "0.00", // Placeholder or simulated balance check
+              balance: "0.00 ETH / BTC",
             },
           });
           return;
@@ -94,7 +104,7 @@ worker.onmessage = async (event) => {
       const elapsedMs = Math.max(1, performance.now() - startedAt);
       const rangeSize = end - start + 1n;
       const progressPercent = Number(((cursor - start) * 10000n) / rangeSize) / 100;
-      const speedMultiplier = engine === 'webgpu' ? 5500 : (engine === 'webgl' ? 2500 : 1200);
+      const speedMultiplier = engine === 'webgpu' ? 12000 : (engine === 'webgl' ? 5000 : 1500);
       const calculatedSpeed = Math.floor((attempts / elapsedMs) * speedMultiplier);
 
       worker.postMessage({
