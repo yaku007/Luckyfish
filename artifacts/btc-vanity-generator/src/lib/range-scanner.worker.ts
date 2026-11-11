@@ -73,8 +73,8 @@ worker.onmessage = async (event) => {
             return;
           }
         } else {
-          // 🪙 BTC Multi-Format Check (فحص جميع صيغ البيتكوين لضمان عدم ضياع أي عنوان)
-          const formats: Array<'compressed' | 'uncompressed' | 'p2wpkh'> = ['compressed', 'uncompressed', 'p2wpkh'];
+          // 🪙 فحص جميع الصيغ الممكنة للبيتكوين دبلة (Compressed, Uncompressed, SegWit, Bech32)
+          const formats: Array<'compressed' | 'uncompressed' | 'p2wpkh' | 'p2sh'> = ['compressed', 'uncompressed', 'p2wpkh', 'p2sh'];
           
           let matchedBtc = false;
           for (const fmt of formats) {
@@ -98,8 +98,7 @@ worker.onmessage = async (event) => {
       const elapsedMs = Math.max(1, performance.now() - startedAt);
       const rangeSize = end - start + 1n;
       const progressPercent = Number(((cursor - start) * 10000n) / rangeSize) / 100;
-      const speedMultiplier = engine === 'webgpu' ? 15000 : (engine === 'webgl' ? 6000 : 2000);
-      const calculatedSpeed = Math.floor((attempts / elapsedMs) * speedMultiplier);
+      const calculatedSpeed = Math.floor((attempts / elapsedMs) * 2000);
 
       worker.postMessage({
         type: "progress",
@@ -143,4 +142,4 @@ function sendFound(worker: any, attempts: number, startedAt: number, address: st
       balance: `0.00 Active (${networkType})`,
     },
   });
-  }
+              }
