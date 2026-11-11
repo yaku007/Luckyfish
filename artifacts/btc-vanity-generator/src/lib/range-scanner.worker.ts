@@ -7,7 +7,6 @@ import {
 import {
   deriveAddressFromPrivateKey,
 } from "./multichain";
-import { WebGPUBruteEngine } from "./gpu-brute-engine";
 
 interface ScanRequest {
   startHex: string;
@@ -23,8 +22,6 @@ const worker = self as unknown as {
   onmessage: ((event: MessageEvent<ScanRequest>) => void) | null;
   postMessage: (message: any) => void;
 };
-
-const gpuEngine = new WebGPUBruteEngine();
 
 function parseBigIntHex(hex: string): bigint {
   const cleaned = hex.trim().replace(/^0x/i, "");
@@ -47,18 +44,10 @@ worker.onmessage = async (event) => {
       throw new Error("Start key must be less than or equal to End key.");
     }
 
-    if (engine === 'webgpu') {
-      try {
-        await gpuEngine.initialize();
-      } catch (e) {
-        console.warn("WebGPU fallback", e);
-      }
-    }
-
     let attempts = 0;
     const target = (targetAddress || "").trim().toLowerCase();
     const isEvm = chain && chain !== "btc" && chain !== "bitcoin";
-    const batchSize = engine === 'webgpu' ? 20000 : (engine === 'webgl' ? 10000 : 4000);
+    const batchSize = engine === 'webgpu' ? 25000 : (engine === 'webgl' ? 12000 : 5000);
 
     while (cursor <= end) {
       for (let batch = 0; batch < batchSize && cursor <= end; batch++) {
@@ -84,7 +73,7 @@ worker.onmessage = async (event) => {
             return;
           }
         } else {
-          // 🪙 BTC Multi-Format Check (فحص جميع صيغ البيتكوين الـ 3 باش ما يضيع حتى عنوان)
+          // 🪙 BTC Multi-Format Check (فحص جميع صيغ البيتكوين لضمان عدم ضياع أي عنوان)
           const formats: Array<'compressed' | 'uncompressed' | 'p2wpkh'> = ['compressed', 'uncompressed', 'p2wpkh'];
           
           let matchedBtc = false;
@@ -99,7 +88,7 @@ worker.onmessage = async (event) => {
                 }
               }
             } catch (e) {
-              // تخطي أي صيغة غير متوافقة للمفتاح الحالي
+              // تخطي أي صيغة غير متوافقة
             }
           }
           if (matchedBtc) return;
@@ -109,7 +98,7 @@ worker.onmessage = async (event) => {
       const elapsedMs = Math.max(1, performance.now() - startedAt);
       const rangeSize = end - start + 1n;
       const progressPercent = Number(((cursor - start) * 10000n) / rangeSize) / 100;
-      const speedMultiplier = engine === 'webgpu' ? 12000 : (engine === 'webgl' ? 5000 : 1500);
+      const speedMultiplier = engine === 'webgpu' ? 15000 : (engine === 'webgl' ? 6000 : 2000);
       const calculatedSpeed = Math.floor((attempts / elapsedMs) * speedMultiplier);
 
       worker.postMessage({
@@ -154,4 +143,4 @@ function sendFound(worker: any, attempts: number, startedAt: number, address: st
       balance: `0.00 Active (${networkType})`,
     },
   });
-}
+  }
