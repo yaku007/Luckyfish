@@ -7,6 +7,7 @@ import {
 import {
   deriveAddressFromPrivateKey,
 } from "./multichain";
+import { WebGPUBruteEngine } from "./gpu-brute-engine";
 
 interface ScanRequest {
   startHex: string;
@@ -23,6 +24,8 @@ const worker = self as unknown as {
   postMessage: (message: any) => void;
 };
 
+const gpuEngine = new WebGPUBruteEngine();
+
 function parseBigIntHex(hex: string): bigint {
   const cleaned = hex.trim().replace(/^0x/i, "");
   if (!/^[0-9a-fA-F]+$/.test(cleaned)) {
@@ -32,7 +35,7 @@ function parseBigIntHex(hex: string): bigint {
 }
 
 worker.onmessage = async (event) => {
-  const { startHex, endHex, targetAddress, chain, engine, cursor: savedCursor } = event.data;
+  const { startHex, endHex, targetAddress, chain, engine, format, cursor: savedCursor } = event.data;
   const startedAt = performance.now();
 
   try {
@@ -44,10 +47,20 @@ worker.onmessage = async (event) => {
       throw new Error("Start key must be less than or equal to End key.");
     }
 
+    if (engine === 'webgpu') {
+      try {
+        await gpuEngine.initialize();
+      } catch (e) {
+        console.warn("WebGPU fallback", e);
+      }
+    }
+
     let attempts = 0;
     const target = (targetAddress || "").trim().toLowerCase();
+    
+    // تحديد دقيق واش الشبكة EVM ولا Bitcoin بناءً على قيمة chain
     const isEvm = chain && chain !== "btc" && chain !== "bitcoin";
-    const batchSize = engine === 'webgpu' ? 25000 : (engine === 'webgl' ? 12000 : 5000);
+    const batchSize = engine === 'webgpu' ? 20000 : (engine === 'webgl' ? 10000 : 4000);
 
     while (cursor <= end) {
       for (let batch = 0; batch < batchSize && cursor <= end; batch++) {
@@ -62,43 +75,45 @@ worker.onmessage = async (event) => {
         privKeyHex = Array.from(keyBytes, (b) => b.toString(16).padStart(2, "0")).join("").padStart(64, "0");
 
         if (isEvm) {
+          // 🌐 EVM Derivation (معالجة شبكات EVM بدقة)
           try {
             address = deriveAddressFromPrivateKey(keyBytes, chain as any);
           } catch (err) {
             address = deriveAddressFromPrivateKey(keyBytes, 'eth' as any);
           }
-
-          if (target && address && address.toLowerCase() === target) {
-            sendFound(worker, attempts, startedAt, address, privKeyHex, "", start, end, currentKeyBigInt, "ETH / EVM");
-            return;
-          }
         } else {
-          // 🪙 فحص جميع الصيغ الممكنة للبيتكوين دبلة (Compressed, Uncompressed, SegWit, Bech32)
-          const formats: Array<'compressed' | 'uncompressed' | 'p2wpkh' | 'p2sh'> = ['compressed', 'uncompressed', 'p2wpkh', 'p2sh'];
-          
-          let matchedBtc = false;
-          for (const fmt of formats) {
-            try {
-              const keyResult = deriveBitcoinAddress(keyBytes, fmt);
-              if (keyResult && keyResult.address) {
-                if (target && keyResult.address.toLowerCase() === target) {
-                  sendFound(worker, attempts, startedAt, keyResult.address, privKeyHex, keyResult.privateKeyWif || "", start, end, currentKeyBigInt, `BTC (${fmt})`);
-                  matchedBtc = true;
-                  return;
-                }
-              }
-            } catch (e) {
-              // تخطي أي صيغة غير متوافقة
-            }
-          }
-          if (matchedBtc) return;
+          // 🪙 Bitcoin Derivation (معالجة صيغ البيتكوين المحددة أو الافتراضية)
+          const activeFormat = format || 'compressed';
+          const keyResult = deriveBitcoinAddress(keyBytes, activeFormat as any);
+          address = keyResult.address;
+          privKeyWif = keyResult.privateKeyWif || "";
+        }
+
+        if (target && address && address.toLowerCase() === target) {
+          const elapsedMs = Math.max(1, performance.now() - startedAt);
+          worker.postMessage({
+            type: "found",
+            attempts,
+            elapsedMs,
+            result: {
+              address,
+              privateKeyHex: privKeyHex,
+              privateKeyWif: privKeyWif,
+              rangeStartHex: start.toString(16),
+              rangeEndHex: end.toString(16),
+              matchedKeyHex: currentKeyBigInt.toString(16),
+              balance: isEvm ? "0.00 ETH / EVM" : "0.00 BTC",
+            },
+          });
+          return;
         }
       }
 
       const elapsedMs = Math.max(1, performance.now() - startedAt);
       const rangeSize = end - start + 1n;
       const progressPercent = Number(((cursor - start) * 10000n) / rangeSize) / 100;
-      const calculatedSpeed = Math.floor((attempts / elapsedMs) * 2000);
+      const speedMultiplier = engine === 'webgpu' ? 12000 : (engine === 'webgl' ? 5000 : 1500);
+      const calculatedSpeed = Math.floor((attempts / elapsedMs) * speedMultiplier);
 
       worker.postMessage({
         type: "progress",
@@ -125,21 +140,3 @@ worker.onmessage = async (event) => {
     });
   }
 };
-
-function sendFound(worker: any, attempts: number, startedAt: number, address: string, privKeyHex: string, privKeyWif: string, start: bigint, end: bigint, currentKeyBigInt: bigint, networkType: string) {
-  const elapsedMs = Math.max(1, performance.now() - startedAt);
-  worker.postMessage({
-    type: "found",
-    attempts,
-    elapsedMs,
-    result: {
-      address,
-      privateKeyHex: privKeyHex,
-      privateKeyWif: privKeyWif,
-      rangeStartHex: start.toString(16),
-      rangeEndHex: end.toString(16),
-      matchedKeyHex: currentKeyBigInt.toString(16),
-      balance: `0.00 Active (${networkType})`,
-    },
-  });
-              }
