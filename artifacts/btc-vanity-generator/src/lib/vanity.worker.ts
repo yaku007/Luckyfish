@@ -2,17 +2,24 @@
 
 import {
   deriveBitcoinAddress,
+  deriveBitcoinAddressOnly,
   PRIVATE_KEY_LIMIT,
   privateKeyFromRangeValue,
   randomPrivateKey,
 } from "./bitcoin";
 import {
   deriveAddressFromPrivateKey,
+  matchesEvmVanityPattern,
 } from "./multichain";
 import {
+  CANDIDATE_BATCH_SIZE,
+  MAX_RECORDED_RANGE_CANDIDATES,
+  type CandidateRecord,
   type WorkerRequest,
   type WorkerResponse,
 } from "./vanity-protocol";
+
+const MAX_CANDIDATES_BETWEEN_YIELDS = 32;
 
 const worker = self as unknown as {
   onmessage: ((event: MessageEvent<WorkerRequest>) => void) | null;
@@ -21,6 +28,16 @@ const worker = self as unknown as {
 
 let stopRequested = false;
 let running = false;
+
+function matches(
+  address: string,
+  prefix: string,
+  suffix: string,
+  targetAddress: string,
+): boolean {
+  if (targetAddress) return address === targetAddress;
+  return address.startsWith(prefix) && address.endsWith(suffix);
+}
 
 function parseRangeValue(value: string | undefined, label: string): bigint {
   const normalized = (value ?? "").trim().replace(/^0x/i, "");
@@ -32,6 +49,41 @@ function parseRangeValue(value: string | undefined, label: string): bigint {
     throw new Error(`${label} is outside the valid Bitcoin private-key range.`);
   }
   return parsed;
+}
+
+function reportProgress(
+  attempts: number,
+  startedAt: number,
+  rangePercent: number | null,
+) {
+  const elapsedMs = Math.max(1, performance.now() - startedAt);
+  worker.postMessage({
+    type: "progress",
+    attempts,
+    elapsedMs,
+    percent: rangePercent,
+  });
+}
+
+function reportEnd(
+  type: "exhausted" | "stopped" | "generated",
+  attempts: number,
+  startedAt: number,
+) {
+  worker.postMessage({
+    type,
+    attempts,
+    elapsedMs: Math.max(1, performance.now() - startedAt),
+  });
+}
+
+function reportHistoryLimit(attempts: number, startedAt: number) {
+  worker.postMessage({
+    type: "history-limit",
+    attempts,
+    elapsedMs: Math.max(1, performance.now() - startedAt),
+    limit: MAX_RECORDED_RANGE_CANDIDATES,
+  });
 }
 
 worker.onmessage = (event) => {
@@ -51,8 +103,21 @@ worker.onmessage = (event) => {
     let start = 0n;
     let end = 0n;
     let cursor = 0n;
+    let pendingCandidates: CandidateRecord[] = [];
 
     try {
+      if (options.generateOnly && options.mode !== "range") {
+        throw new Error("Generate-only mode requires a custom key range.");
+      }
+      if (
+        !options.generateOnly &&
+        !options.targetAddress &&
+        !options.prefix &&
+        !options.suffix
+      ) {
+        throw new Error("Enter a prefix or suffix to search for.");
+      }
+
       if (options.mode === "range") {
         start = parseRangeValue(options.startHex, "Start of range");
         end = parseRangeValue(options.endHex, "End of range");
@@ -63,95 +128,128 @@ worker.onmessage = (event) => {
       }
 
       const rangeSize = options.mode === "range" ? end - start + 1n : 0n;
-      let lastReportAt = performance.now();
+      const candidateLimit =
+        options.candidateLimit ?? MAX_RECORDED_RANGE_CANDIDATES;
+      if (
+        !Number.isInteger(candidateLimit) ||
+        candidateLimit < 1 ||
+        candidateLimit > MAX_RECORDED_RANGE_CANDIDATES
+      ) {
+        throw new Error("Candidate history limit is outside the allowed range.");
+      }
+      let lastReportAt = 0;
+      const flushCandidates = () => {
+        if (pendingCandidates.length === 0) return;
+        worker.postMessage({
+          type: "candidates",
+          candidates: pendingCandidates,
+        });
+        pendingCandidates = [];
+      };
 
       while (!stopRequested) {
-        for (let batch = 0; batch < 2000 && !stopRequested; batch++) {
+        for (
+          let count = 0;
+          count < MAX_CANDIDATES_BETWEEN_YIELDS && !stopRequested;
+          count += 1
+        ) {
           if (options.mode === "range" && cursor > end) {
-            worker.postMessage({
-              type: "exhausted",
+            flushCandidates();
+            reportEnd(
+              options.generateOnly ? "generated" : "exhausted",
               attempts,
-              elapsedMs: Math.max(1, performance.now() - startedAt),
-            });
+              startedAt,
+            );
             return;
           }
 
-          const currentCursor = cursor;
           const key =
             options.mode === "range"
               ? privateKeyFromRangeValue(cursor++)
               : randomPrivateKey();
-
-          const evmChain = options.chain && options.chain !== "btc" ? options.chain : null;
+          const result =
+            options.mode === "range"
+              ? deriveBitcoinAddress(key, options.format)
+              : undefined;
+          const evmChain =
+            options.chain && options.chain !== "btc" ? options.chain : null;
           const isEvmChain = evmChain !== null;
-
-          let address = "";
-          let keyResult: any = null;
-
-          // 🛠️ توحيد طريقة استخراج الـ Hex Private Key بـ 32 بايت مضبوطة (مطابقة للـ Generator)
-          const privKeyHex = Array.from(key, (b) => b.toString(16).padStart(2, "0")).join("").padStart(64, "0");
-
-          if (isEvmChain) {
-            address = deriveAddressFromPrivateKey(key, evmChain);
-            keyResult = {
+          const address =
+            options.mode === "random" && isEvmChain
+              ? deriveAddressFromPrivateKey(key, evmChain)
+              : result?.address ?? deriveBitcoinAddressOnly(key, options.format);
+          attempts += 1;
+          if (options.mode === "range") {
+            if (!result) {
+              throw new Error("Could not derive the generated private key.");
+            }
+            pendingCandidates.push({
+              index: (options.candidateOffset ?? 0) + attempts,
               address,
-              privateKeyHex: privKeyHex,
-              privateKeyWif: "",
-            };
-          } else {
-            keyResult = deriveBitcoinAddress(key, options.format);
-            address = keyResult.address;
-            keyResult.privateKeyHex = privKeyHex;
+              selectedChainAddress:
+                options.chain && options.chain !== "btc"
+                  ? deriveAddressFromPrivateKey(key, options.chain)
+                  : address,
+              privateKeyWif: result.privateKeyWif,
+              rangeStartHex: start.toString(16),
+              rangeEndHex: end.toString(16),
+            });
+            if (pendingCandidates.length >= CANDIDATE_BATCH_SIZE) {
+              flushCandidates();
+            }
           }
 
-          attempts += 1;
-
-          const target = (options.targetAddress ?? "").trim().toLowerCase();
-          const isMatch = target ? address.toLowerCase() === target : false;
-
-          if (isMatch) {
+          if (
+            !options.generateOnly &&
+            (isEvmChain
+              ? matchesEvmVanityPattern(address, options.prefix, options.suffix)
+              : matches(
+                  address,
+                  options.prefix,
+                  options.suffix,
+                  options.targetAddress ?? "",
+                ))
+          ) {
+            flushCandidates();
+            const keyResult = result ?? deriveBitcoinAddress(key, options.format);
             worker.postMessage({
               type: "found",
               attempts,
               elapsedMs: Math.max(1, performance.now() - startedAt),
-              result: {
-                ...keyResult,
-                address,
-                rangeStartHex: start.toString(16),
-                rangeEndHex: end.toString(16),
-                privateKeyHex: privKeyHex,
-              },
+              result: { ...keyResult, address },
             });
+            return;
+          }
+
+          if (
+            options.mode === "range" &&
+            attempts >= candidateLimit &&
+            cursor <= end
+          ) {
+            flushCandidates();
+            reportHistoryLimit(attempts, startedAt);
             return;
           }
         }
 
         const now = performance.now();
-        if (now - lastReportAt >= 150) {
+        if (now - lastReportAt >= 200) {
           const percent =
-            options.mode === "range" && rangeSize > 0n
+            options.mode === "range"
               ? Math.min(
                   100,
                   Number(((cursor - start) * 1_000_000n) / rangeSize) / 10_000,
                 )
               : null;
-          worker.postMessage({
-            type: "progress",
-            attempts,
-            elapsedMs: Math.max(1, performance.now() - startedAt),
-            percent,
-          });
+          reportProgress(attempts, startedAt, percent);
           lastReportAt = now;
         }
 
         await new Promise<void>((resolve) => setTimeout(resolve, 0));
       }
 
-      worker.postMessage({
-        type: "stopped",
-        attempts,
-        elapsedMs: Math.max(1, performance.now() - startedAt),
-      });
+      flushCandidates();
+      reportEnd("stopped", attempts, startedAt);
     } catch (error) {
       worker.postMessage({
         type: "error",
