@@ -1,18 +1,18 @@
 export class WasmEngine {
   private instance: any = null;
   private initialized: boolean = false;
+  private memory: WebAssembly.Memory | null = null;
 
   async init(): Promise<void> {
     if (this.initialized) return;
     try {
-      // محاولة تحميل ملف الـ WebAssembly الناتج عن C++
-      // (إذا لم يكن مبنياً بعد، سينتقل تلقائياً للوضع الآمن بدون توقف)
       const response = await fetch('/secp_brute.wasm');
       if (response.ok) {
         const buffer = await response.arrayBuffer();
+        this.memory = new WebAssembly.Memory({ initial: 256, maximum: 512 });
         const module = await WebAssembly.instantiate(buffer, {
           env: {
-            memory: new WebAssembly.Memory({ initial: 256, maximum: 512 }),
+            memory: this.memory,
             abort: () => {},
           }
         });
@@ -20,16 +20,29 @@ export class WasmEngine {
       }
       this.initialized = true;
     } catch (e) {
-      console.warn("WASM C++ binary not loaded, running with standard engine.", e);
+      console.warn("WASM binary not loaded, using fallback.", e);
       this.initialized = true;
     }
   }
 
-  verifyRange(keyBytes: Uint8Array, targetBytes: Uint8Array): boolean {
-    if (this.instance && typeof this.instance.verify_secp256k1_range === 'function') {
-      // تمرير البايتس مباشرة لدالة C++ في secp_brute.cpp
-      return this.instance.verify_secp256k1_range(0, 0) === 1;
-    }
-    return true;
+  isReady(): boolean {
+    return this.instance !== null && this.memory !== null;
   }
-        }
+
+  // هاد الدالة كتاخد Array ديال المفاتيح وكتزيدهم كاملين بـ 1
+  incrementKeys(keysBuffer: Uint8Array, count: number): void {
+    if (!this.instance || !this.memory) return;
+
+    // 1. نلقاو فين كاين الـ Memory Pointer
+    const mem = new Uint8Array(this.memory.buffer);
+    
+    // 2. نكتبو المفاتيح فالذاكرة (فـ الأول ديال الـ Memory)
+    mem.set(keysBuffer, 0);
+
+    // 3. كنعيطو للدالة ديال C++ (كتاخد المؤشر 0 وعدد المفاتيح)
+    this.instance.increment_keys(0, count);
+
+    // 4. كنقراو المفاتيح الجديدة من الذاكرة ونرجعوهم
+    keysBuffer.set(mem.slice(0, count * 32));
+  }
+}
