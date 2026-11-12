@@ -1,27 +1,20 @@
 #include <emscripten/emscripten.h>
 #include <stdint.h>
-#include <cstring>
 
-// خوارزمية سريعة بلغة C++ للحسابات الدقيقة للمفاتيح داخل Memory المتصفح
 extern "C" {
 
+// دالة كتاخد مؤشر على Array ديال المفاتيح، وعدد المفاتيح، وكتزيد كل مفتاح بـ 1
 EMSCRIPTEN_KEEPALIVE
-int check_range_match(const uint8_t* start_key, uint64_t range_len, const uint8_t* target_hash) {
-    uint8_t current_key[32];
-    std::memcpy(current_key, start_key, 32);
-
-    for (uint64_t i = 0; i < range_len; i++) {
-        // زيادة المفتاح بمقدار 1 في C++ بأقصى سرعة معالجة
+void increment_keys(uint8_t* keys_ptr, uint32_t count) {
+    for (uint32_t i = 0; i < count; i++) {
+        uint8_t* current_key = keys_ptr + (i * 32);
+        // الزيادة بـ 1 (BigInt Increment)
         for (int j = 31; j >= 0; j--) {
-            if (++current_key[j] != 0) break;
-        }
-        
-        // محاكاة المطابقة السريعة في ذاكرة الـ RAM مباشرة
-        if (std::memcmp(current_key, target_hash, 20) == 0) {
-            return i; // العثور على الأوفسيت فالبلاصة
+            if (++current_key[j] != 0) {
+                break;
+            }
         }
     }
-    return -1;
 }
 
 }
