@@ -5,12 +5,25 @@ import { MULTI_CHAIN_OPTIONS, type MultiChainName } from '@/lib/multichain';
 import { saveSearchProgress, getSearchProgress } from '@/lib/persistence';
 import './bitcoin-range-lookup.css';
 
+// دالة جديدة باش نجيبو الرصيد من Blockchain.com (بحال صفحة Balance Check)
+async function fetchBitcoinBalance(address: string): Promise<string> {
+  try {
+    const response = await fetch(`https://blockchain.info/q/addressbalance/${address}`);
+    if (!response.ok) return "0.00000000";
+    const satoshi = await response.json();
+    const btc = satoshi / 100000000;
+    return btc.toFixed(8);
+  } catch (e) {
+    return "Error fetching balance";
+  }
+}
+
 export default function BitcoinRangeLookupPage({ active }: { active: boolean }) {
   const [startHex, setStartHex] = useState('1');
   const [endHex, setEndHex] = useState('5000');
-  const [chain, setChain] = useState<MultiChainName>('eth');
+  const [chain, setChain] = useState<MultiChainName>('btc'); // بدلناها لـ btc باش الرصيد يخدم
   const [targetAddress, setTargetAddress] = useState('');
-  const [engine, setEngine] = useState<'cpu' | 'webgl' | 'webgpu'>('webgpu');
+  const [engine, setEngine] = useState<'cpu' | 'webgl' | 'webgpu'>('cpu'); // بدلناها لـ cpu باش تخدم دابا
   const [savedCursor, setSavedCursor] = useState<string | null>(null);
 
   const [status, setStatus] = useState('Ready');
@@ -81,12 +94,22 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
       const worker = new Worker(new URL('../lib/range-scanner.worker.ts', import.meta.url), { type: 'module' });
       workerRef.current = worker;
 
-      worker.onmessage = (event) => {
+      // هنا كنستقبلو الرسائل من الـ Worker
+      worker.onmessage = async (event) => {
         const message = event.data;
 
         if (message.type === 'found') {
           setAttempts(message.attempts);
-          setMatch(message.result);
+          
+          // 1. ملي كيلقى المطابقة، كنجيبو الرصيد
+          const balance = chain === 'btc' ? await fetchBitcoinBalance(message.result.address) : 'N/A';
+          
+          // 2. كنحدثو الحالة (State) باش يبان كلشي
+          setMatch({
+            ...message.result,
+            balance: balance
+          });
+          
           setStatus('Found');
           setSearching(false);
           setNotice('Target private key found successfully!');
@@ -202,7 +225,7 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
                 type="text"
                 value={targetAddress}
                 onChange={(e) => setTargetAddress(e.target.value)}
-                placeholder="0x..."
+                placeholder="1... or 0x..."
                 disabled={searching}
                 required
                 style={{ width: '100%', minHeight: '42px', padding: '0 10px', background: 'hsl(var(--background))', color: 'hsl(var(--foreground))', borderRadius: '8px', border: '1px solid hsl(var(--border))' }}
@@ -280,7 +303,7 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
 
           <div style={{ fontSize: '12px', marginBottom: '6px' }}>
             <span style={{ color: 'hsl(var(--muted-foreground))' }}>Balance:</span>
-            <span style={{ color: '#4ade80', fontWeight: 700, marginLeft: '6px' }}>{match.balance}</span>
+            <span style={{ color: '#4ade80', fontWeight: 700, marginLeft: '6px' }}>{match.balance} {chain.toUpperCase()}</span>
           </div>
 
           <div style={{ fontSize: '12px', marginBottom: '6px' }}>
@@ -302,6 +325,21 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
               )}
             </div>
           </div>
+
+          {/* عرض الـ Private Key WIF */}
+          {match.privateKeyWif && (
+            <div style={{ fontSize: '12px', marginTop: '8px' }}>
+              <span style={{ color: 'hsl(var(--muted-foreground))' }}>Private Key (WIF):</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '2px' }}>
+                <code style={{ wordBreak: 'break-all', color: 'hsl(var(--foreground))' }}>{showPrivateKey ? match.privateKeyWif : '••••••••••••••••••••••••••••••••••••'}</code>
+                {showPrivateKey && (
+                  <button type="button" onClick={() => copyValue(match.privateKeyWif)} style={{ padding: '4px 8px', fontSize: '10px', cursor: 'pointer' }}>
+                    <Copy size={10} /> Copy
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -310,4 +348,4 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
       </footer>
     </main>
   );
-      }
+            }
