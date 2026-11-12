@@ -3,6 +3,7 @@
 import { deriveBitcoinAddress, privateKeyFromRangeValue } from "./bitcoin";
 import { deriveAddressFromPrivateKey } from "./multichain";
 import { WasmEngine } from "./wasm-engine";
+import { saveSearchProgress } from "./persistence";
 
 interface ScanRequest {
   startHex: string;
@@ -27,13 +28,11 @@ function parseBigIntHex(hex: string): bigint {
   return BigInt(`0x${cleaned}`);
 }
 
-// دالة باش نحولو BigInt لـ 32 Bytes
 function bigIntTo32Bytes(val: bigint): Uint8Array {
   const hex = val.toString(16).padStart(64, '0');
   return Uint8Array.from(hex.match(/.{1,2}/g)!.map(byte => parseInt(byte, 16)));
 }
 
-// دالة باش نحولو 32 Bytes لـ BigInt
 function bytesToBigInt(bytes: Uint8Array): bigint {
   return BigInt(`0x${Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')}`);
 }
@@ -42,7 +41,6 @@ worker.onmessage = async (event) => {
   const { startHex, endHex, targetAddress, chain, format, cursor: savedCursor } = event.data;
   const startedAt = performance.now();
 
-  // 1. كنحملو الـ WASM (إلا كان موجود)
   await wasm.init();
 
   try {
@@ -56,14 +54,10 @@ worker.onmessage = async (event) => {
     const target = (targetAddress || "").trim().toLowerCase();
     const isEvm = chain && chain !== "btc" && chain !== "bitcoin";
     
-    // إصلاح مشكل الـ Format باش يخدم مع bitcoin.ts
     const activeFormat = (format === 'segwit' || format === 'legacy') ? format : 'legacy';
-    
-    // حجم الدفعة (Batch Size)
     const BATCH_SIZE = 2000;
 
     while (cursor <= end) {
-      // 2. نجهزو Array ديال المفاتيح
       const batchCount = Number(end - cursor + 1n) > BATCH_SIZE ? BATCH_SIZE : Number(end - cursor + 1n);
       const keysBuffer = new Uint8Array(batchCount * 32);
 
@@ -73,18 +67,15 @@ worker.onmessage = async (event) => {
         keysBuffer.set(keyBytes, i * 32);
       }
 
-      // 3. نستعملو WASM باش نزيدو المفاتيح (Increment) بسرعة
       if (wasm.isReady()) {
         wasm.incrementKeys(keysBuffer, batchCount);
       } else {
-        // Fallback: نزيدوهم بـ JS إلا كان WASM ماشي خدام
         for (let i = 0; i < batchCount; i++) {
            let val = bytesToBigInt(keysBuffer.slice(i*32, (i+1)*32)) + 1n;
            keysBuffer.set(bigIntTo32Bytes(val), i*32);
         }
       }
 
-      // 4. كنحسبو العناوين ونقارنو
       for (let i = 0; i < batchCount && cursor <= end; i++) {
         const currentKeyBigInt = cursor++;
         const keyBytes = keysBuffer.slice(i * 32, (i + 1) * 32);
@@ -92,36 +83,43 @@ worker.onmessage = async (event) => {
 
         let address = "";
         let privKeyWif = "";
+        const privKeyHex = Array.from(keyBytes, (b) => b.toString(16).padStart(2, "0")).join("");
 
         if (isEvm) {
           address = deriveAddressFromPrivateKey(keyBytes, chain as any);
+          privKeyWif = `0x${privKeyHex}`;
         } else {
           const keyResult = deriveBitcoinAddress(keyBytes, activeFormat as any);
           address = keyResult.address;
-          privKeyWif = keyResult.privateKeyWif || ""; // <--- هنا كنجيبو الـ WIF
+          privKeyWif = keyResult.privateKeyWif || "";
         }
 
-        // التحقق من التطابق
         if (target && address && address.toLowerCase() === target) {
           const elapsedMs = Math.max(1, performance.now() - startedAt);
+          const resultPayload = {
+            address,
+            privateKeyHex: privKeyHex,
+            privateKeyWif: privKeyWif,
+            balance: isEvm ? `0.00 ${chain.toUpperCase()}` : "0.00 BTC",
+            matchedKeyHex: currentKeyBigInt.toString(16),
+            rangeStartHex: start.toString(16),
+            rangeEndHex: end.toString(16),
+            chain: isEvm ? chain : "btc",
+          };
+
+          // حفظ النتائج في التخزين المحلي عبر persistence.ts
+          saveSearchProgress(resultPayload);
+
           worker.postMessage({
             type: "found",
             attempts,
             elapsedMs,
-            result: {
-              address,
-              privateKeyHex: Array.from(keyBytes, (b) => b.toString(16).padStart(2, "0")).join(""),
-              privateKeyWif: privKeyWif, // <--- كنصيفطوه للواجهة
-              matchedKeyHex: currentKeyBigInt.toString(16),
-              rangeStartHex: start.toString(16),
-              rangeEndHex: end.toString(16),
-            },
+            result: resultPayload,
           });
           return;
         }
       }
 
-      // 5. تحديث الواجهة (Progress)
       const elapsedMs = Math.max(1, performance.now() - startedAt);
       const rangeSize = end - start + 1n;
       const progressPercent = Number(((cursor - start) * 10000n) / rangeSize) / 100;
@@ -138,7 +136,6 @@ worker.onmessage = async (event) => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
 
-    // إلا سالا المجال وكاين مالقاش
     worker.postMessage({ type: "exhausted", attempts, elapsedMs: Math.max(1, performance.now() - startedAt) });
 
   } catch (error: any) {
