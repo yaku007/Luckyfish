@@ -4,6 +4,7 @@
   "buildCommand": "PORT=21869 BASE_PATH=/ pnpm --filter @workspace/btc-vanity-generator run build",
   "outputDirectory": "artifacts/btc-vanity-generator/dist/public",
   "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/$1" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]
 }
