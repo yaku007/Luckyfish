@@ -87,6 +87,18 @@
   font-size: 15px;
 }
 
+/* 🛠️ إصلاح مشكل خروج النص (الرقم الطويل) */
+.finder-status span {
+  display: block;
+  margin-top: 8px;
+  font-family: var(--app-font-mono, monospace);
+  font-size: 12px;
+  color: #ffbd72;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+
 .finder-error {
   margin: 0;
   color: #ff9a8a;
@@ -102,6 +114,7 @@
   border-radius: 10px;
   background: rgba(25, 75, 52, 0.15);
   overflow-wrap: anywhere;
+  word-break: break-all;
 }
 
 .finder-match p {
@@ -112,7 +125,7 @@
 
 .finder-match-address {
   color: hsl(var(--foreground)) !important;
-  font-family: var(--app-font-mono);
+  font-family: var(--app-font-mono, monospace);
   font-size: 15px;
   font-weight: bold;
 }
@@ -149,4 +162,4 @@
   .finder-index-row {
     grid-template-columns: 1fr;
   }
-}
+  }
