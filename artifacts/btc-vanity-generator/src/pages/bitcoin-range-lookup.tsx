@@ -5,6 +5,7 @@ import { MULTI_CHAIN_OPTIONS, type MultiChainName } from '@/lib/multichain';
 import { saveSearchProgress, getSearchProgress } from '@/lib/persistence';
 import './bitcoin-range-lookup.css';
 
+// جلب الرصيد من Blockchain
 async function fetchBitcoinBalance(address: string): Promise<string> {
   try {
     const response = await fetch(`https://blockchain.info/q/addressbalance/${address}`);
@@ -111,6 +112,7 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
         workersRef.current.push(worker);
         speedMap.set(worker, 0);
 
+        // 🛠️ هنا فين كنعيطو للـ Balance والـ WIF
         worker.onmessage = async (event) => {
           const message = event.data;
 
@@ -129,9 +131,15 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
               timestamp: Date.now()
             });
           } else if (message.type === 'found') {
-            // 🛠️ هنا كنجيبو الرصيد باش يبان فـ الشاشة
+            // 🛠️ هنا فين كنجيبو الرصيد (Balance) من الـ API
             const balance = chain === 'btc' ? await fetchBitcoinBalance(message.result.address) : 'N/A';
-            setMatch({ ...message.result, balance });
+            
+            // 🛠️ هنا فين كنعرضو الـ WIF والـ Hex اللي جايين من الـ Worker
+            setMatch({ 
+              ...message.result, 
+              balance: balance,
+              privateKeyWif: message.result.privateKeyWif // الـ WIF من الـ Worker
+            });
             
             setStatus('Found');
             setSearching(false);
@@ -296,7 +304,12 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
         {searching ? (
           <div style={{ fontSize: '13px', color: '#ffbd72' }}>
             Searching...<br />
-            Key: {currentKey} · {formatSpeed(keysPerSec)} keys/sec
+            <span style={{ display: 'block', wordBreak: 'break-all', overflowWrap: 'anywhere', marginTop: '4px', color: 'hsl(var(--foreground))' }}>
+              Key: {currentKey}
+            </span>
+            <span style={{ display: 'block', marginTop: '4px', fontWeight: 'bold' }}>
+              Speed: {formatSpeed(keysPerSec)} keys/sec
+            </span>
           </div>
         ) : (
           <div style={{ fontSize: '13px', color: 'hsl(var(--foreground))' }}>{status === 'Ready' ? 'Idle. Ready to scan.' : `Completed with status: ${status}`}</div>
@@ -315,9 +328,10 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
           
           <div style={{ fontSize: '12px', marginBottom: '6px' }}>
             <span style={{ color: 'hsl(var(--muted-foreground))' }}>Address:</span>
-            <code style={{ display: 'block', color: 'hsl(var(--foreground))', wordBreak: 'break-all' }}>{match.address}</code>
+            <code style={{ display: 'block', color: 'hsl(var(--foreground))', wordBreak: 'break-all', overflowWrap: 'anywhere' }}>{match.address}</code>
           </div>
 
+          {/* 🛠️ عرض الرصيد */}
           <div style={{ fontSize: '12px', marginBottom: '6px' }}>
             <span style={{ color: 'hsl(var(--muted-foreground))' }}>Balance:</span>
             <span style={{ color: '#4ade80', fontWeight: 700, marginLeft: '6px' }}>{match.balance} {chain.toUpperCase()}</span>
@@ -325,13 +339,13 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
 
           <div style={{ fontSize: '12px', marginBottom: '6px' }}>
             <span style={{ color: 'hsl(var(--muted-foreground))' }}>Range Discovered:</span>
-            <span style={{ color: '#ffbd72', marginLeft: '6px' }}>{match.rangeStartHex} → {match.rangeEndHex}</span>
+            <span style={{ color: '#ffbd72', marginLeft: '6px', wordBreak: 'break-all' }}>{match.rangeStartHex} → {match.rangeEndHex}</span>
           </div>
 
           <div style={{ fontSize: '12px', marginTop: '8px' }}>
             <span style={{ color: 'hsl(var(--muted-foreground))' }}>Private Key (Hex):</span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '2px' }}>
-              <code style={{ wordBreak: 'break-all', color: 'hsl(var(--foreground))' }}>{showPrivateKey ? match.privateKeyHex : '••••••••••••••••••••••••••••••••••••'}</code>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '2px', flexWrap: 'wrap' }}>
+              <code style={{ wordBreak: 'break-all', overflowWrap: 'anywhere', color: 'hsl(var(--foreground))' }}>{showPrivateKey ? match.privateKeyHex : '••••••••••••••••••••••••••••••••••••'}</code>
               <button type="button" onClick={() => setShowPrivateKey(!showPrivateKey)} style={{ padding: '4px 8px', fontSize: '10px', cursor: 'pointer' }}>
                 <Eye size={10} /> {showPrivateKey ? 'Hide' : 'Reveal'}
               </button>
@@ -343,11 +357,12 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
             </div>
           </div>
 
+          {/* 🛠️ عرض الـ WIF */}
           {match.privateKeyWif && (
             <div style={{ fontSize: '12px', marginTop: '8px' }}>
               <span style={{ color: 'hsl(var(--muted-foreground))' }}>Private Key (WIF):</span>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '2px' }}>
-                <code style={{ wordBreak: 'break-all', color: 'hsl(var(--foreground))' }}>{showPrivateKey ? match.privateKeyWif : '••••••••••••••••••••••••••••••••••••'}</code>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '2px', flexWrap: 'wrap' }}>
+                <code style={{ wordBreak: 'break-all', overflowWrap: 'anywhere', color: 'hsl(var(--foreground))' }}>{showPrivateKey ? match.privateKeyWif : '••••••••••••••••••••••••••••••••••••'}</code>
                 {showPrivateKey && (
                   <button type="button" onClick={() => copyValue(match.privateKeyWif)} style={{ padding: '4px 8px', fontSize: '10px', cursor: 'pointer' }}>
                     <Copy size={10} /> Copy
@@ -364,4 +379,4 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
       </footer>
     </main>
   );
-  }
+        }
