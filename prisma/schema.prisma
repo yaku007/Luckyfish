@@ -4,7 +4,7 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("SDATABASE_URL")
+  url      = env("STORAGE_DATABASE_URL") // 👈 هنا درنا السمية اللي كاينة فـ Vercel
 }
 
 model Address {
