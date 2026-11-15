@@ -1,142 +1,216 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Bitcoin, Check, Copy, Search } from 'lucide-react';
-import { Link } from 'wouter';
-import DonationAddress from '@/components/donation-address';
-import { BITCOIN_PUZZLE_COUNT, getBitcoinPuzzleRange } from '@/lib/bitcoin-puzzle';
-import './bitcoin-puzzle.css';
+import { useRef, useState, useEffect, type FormEvent } from 'react';
+import { Zap, Sparkles } from 'lucide-react';
+import { MULTI_CHAIN_OPTIONS, type MultiChainName } from '@/lib/multichain';
+import './bitcoin-range-lookup.css'; // كنستعملو نفس الـ CSS
 
-export default function BitcoinPuzzlePage({ active }: { active: boolean }) {
-  const [query, setQuery] = useState('');
-  const [copiedPuzzle, setCopiedPuzzle] = useState<number | null>(null);
-  const [copyError, setCopyError] = useState(false);
+export default function BitcoinPuzzlePage() {
+  const [startHex, setStartHex] = useState('1');
+  const [endHex, setEndHex] = useState('5000');
+  const [chain, setChain] = useState<MultiChainName>('btc');
+  
+  const [status, setStatus] = useState('Ready');
+  const [keysPerSec, setKeysPerSec] = useState(0);
+  const [currentKey, setCurrentKey] = useState('');
+  const [match, setMatch] = useState<any>(null);
+  const [notice, setNotice] = useState('');
+  const [searching, setSearching] = useState(false);
 
-  useEffect(() => {
-    if (active) document.title = 'Bitcoin Puzzle | LUCKY BTC';
-  }, [active]);
+  const workersRef = useRef<Worker[]>([]);
 
-  const puzzles = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
-    return Array.from({ length: BITCOIN_PUZZLE_COUNT }, (_, index) => {
-      const number = index + 1;
-      return { number, ...getBitcoinPuzzleRange(number) };
-    }).filter(({ number, startHex, endHex }) => {
-      if (!normalizedQuery) return true;
-      const keyQuery = normalizedQuery.replace(/^0x/, '');
-      return (
-        String(number).includes(normalizedQuery) ||
-        startHex.includes(keyQuery) ||
-        endHex.includes(keyQuery)
-      );
-    });
-  }, [query]);
+  function handleSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    
+    if (searching) {
+      workersRef.current.forEach(w => {
+        w.postMessage({ type: 'stop' });
+        w.terminate();
+      });
+      workersRef.current = [];
+      setSearching(false);
+      setStatus('Stopped');
+      setNotice('Scan stopped.');
+      return;
+    }
 
-  async function copyRange(number: number, startHex: string, endHex: string) {
+    setSearching(true);
+    setStatus('Running');
+    setMatch(null);
+    setKeysPerSec(0);
+    setCurrentKey(startHex);
+    setNotice('');
+
     try {
-      await navigator.clipboard.writeText(`${startHex} - ${endHex}`);
-      setCopiedPuzzle(number);
-      setCopyError(false);
-      window.setTimeout(() => setCopiedPuzzle(null), 1600);
-    } catch {
-      setCopyError(true);
+      const startBig = BigInt(`0x${startHex.trim().replace(/^0x/i, '')}`);
+      const endBig = BigInt(`0x${endHex.trim().replace(/^0x/i, '')}`);
+      const totalKeys = endBig - startBig + 1n;
+
+      if (totalKeys <= 0n) throw new Error("End must be >= Start");
+
+      const numThreads = Math.min(8, Math.max(4, navigator.hardwareConcurrency || 4));
+      const chunkSize = totalKeys / BigInt(numThreads);
+      
+      let totalSpeed = 0;
+      let finishedWorkers = 0;
+      const speedMap = new Map<Worker, number>();
+
+      for (let i = 0; i < numThreads; i++) {
+        const chunkStart = startBig + BigInt(i) * chunkSize;
+        let chunkEnd = chunkStart + chunkSize - 1n;
+        if (i === numThreads - 1) chunkEnd = endBig;
+
+        const worker = new Worker(new URL('../lib/keyhunter.worker.ts', import.meta.url), { type: 'module' });
+        workersRef.current.push(worker);
+        speedMap.set(worker, 0);
+
+        worker.onmessage = (event) => {
+          const message = event.data;
+
+          if (message.type === 'progress') {
+            speedMap.set(worker, message.speed);
+            totalSpeed = Array.from(speedMap.values()).reduce((a, b) => a + b, 0);
+            setKeysPerSec(totalSpeed);
+            setCurrentKey(message.currentKeyHex);
+          } else if (message.type === 'found') {
+            setMatch(message.result);
+            setStatus('Found');
+            setSearching(false);
+            setNotice('Match found in database!');
+            workersRef.current.forEach(w => w.terminate());
+            workersRef.current = [];
+          } else if (message.type === 'exhausted') {
+            finishedWorkers++;
+            if (finishedWorkers === numThreads) {
+              setStatus('Exhausted');
+              setSearching(false);
+              setNotice('Range fully scanned. No match found.');
+              workersRef.current.forEach(w => w.terminate());
+              workersRef.current = [];
+            }
+          }
+        };
+
+        worker.postMessage({
+          type: 'scan',
+          startHex: chunkStart.toString(16),
+          endHex: chunkEnd.toString(16),
+          chain,
+        });
+      }
+    } catch (err: any) {
+      setStatus('Error');
+      setSearching(false);
+      setNotice(err.message || 'Invalid range.');
     }
   }
 
   return (
-    <main className="puzzle-ref-page" data-testid="page-bitcoin-puzzle">
-      <section className="puzzle-ref-intro" aria-labelledby="puzzle-ref-title">
-        <div className="puzzle-ref-kicker">
-          <Bitcoin aria-hidden="true" />
-          Local puzzle index
-        </div>
-        <h1 id="puzzle-ref-title">Bitcoin Puzzle Challenge</h1>
-        <p>
-          Browse all {BITCOIN_PUZZLE_COUNT} public puzzle ranges here. Search by
-          puzzle number or hexadecimal key, then copy a range without leaving
-          this site.
-        </p>
-        <Link
-          className="puzzle-ref-link puzzle-address-lookup-link"
-          href="/puzzle-address-lookup"
-          data-testid="link-puzzle-address-lookup"
-        >
-          <Search aria-hidden="true" />
-          Find range by address
-        </Link>
+    <main className="range-lookup-page" data-testid="page-bitcoin-puzzle">
+      <header className="range-lookup-intro">
+        <div className="range-lookup-kicker"><Zap aria-hidden="true" /> Database Engine Scanner</div>
+        <h1>Bitcoin Puzzle Database Hunter</h1>
+        <p>Search ranges directly against the live database of funded addresses.</p>
+      </header>
+
+      <section className="range-lookup-panel">
+        <p className="range-lookup-label">CONFIG</p>
+        <h2>Scan Parameters</h2>
+
+        <form onSubmit={handleSearch}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '10px', marginTop: '10px' }}>
+            <div className="range-lookup-field" style={{ marginTop: 0 }}>
+              <span>Network</span>
+              <select
+                className="select-control"
+                value={chain}
+                onChange={(e) => setChain(e.target.value as MultiChainName)}
+                disabled={searching}
+                style={{ width: '100%', minHeight: '42px', padding: '0 10px', background: 'hsl(var(--background))', color: 'hsl(var(--foreground))', borderRadius: '8px', border: '1px solid hsl(var(--border))' }}
+              >
+                {MULTI_CHAIN_OPTIONS.map((opt) => (
+                  <option key={opt.id} value={opt.id}>{opt.label} ({opt.symbol})</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginTop: '10px' }}>
+            <div className="range-lookup-field" style={{ marginTop: 0 }}>
+              <span>Start Hex</span>
+              <input
+                type="text"
+                value={startHex}
+                onChange={(e) => setStartHex(e.target.value)}
+                disabled={searching}
+                required
+                style={{ width: '100%', minHeight: '42px', padding: '0 10px', background: 'hsl(var(--background))', color: 'hsl(var(--foreground))', borderRadius: '8px', border: '1px solid hsl(var(--border))' }}
+              />
+            </div>
+            <div className="range-lookup-field" style={{ marginTop: 0 }}>
+              <span>End Hex</span>
+              <input
+                type="text"
+                value={endHex}
+                onChange={(e) => setEndHex(e.target.value)}
+                disabled={searching}
+                required
+                style={{ width: '100%', minHeight: '42px', padding: '0 10px', background: 'hsl(var(--background))', color: 'hsl(var(--foreground))', borderRadius: '8px', border: '1px solid hsl(var(--border))' }}
+              />
+            </div>
+          </div>
+
+          <div style={{ marginTop: '15px' }}>
+            <button
+              type="submit"
+              className="range-lookup-search"
+              style={{ width: '100%', padding: '12px', background: searching ? '#b23d32' : '#e77732', color: '#fff', border: 0, borderRadius: '8px', fontWeight: 700, cursor: 'pointer' }}
+            >
+              {searching ? 'Stop Scan' : 'Start Database Scan'}
+            </button>
+          </div>
+        </form>
+
+        {notice && <p style={{ marginTop: '10px', fontSize: '12px', color: '#ffbd72' }}>{notice}</p>}
       </section>
 
-      <section className="puzzle-ref-board" aria-labelledby="puzzle-ref-board-title">
-        <div className="puzzle-ref-board-head">
-          <div>
-            <p className="puzzle-ref-label">PUZZLE INDEX</p>
-            <h2 id="puzzle-ref-board-title">All puzzle ranges</h2>
+      <section style={{ marginTop: '20px', padding: '16px', background: 'hsl(var(--background))', border: '1px solid hsl(var(--border))', borderRadius: '8px', fontFamily: 'monospace' }}>
+        <div style={{ fontSize: '11px', color: 'hsl(var(--muted-foreground))', marginBottom: '6px' }}>LIVE TELEMETRY: {status.toUpperCase()}</div>
+        {searching ? (
+          <div style={{ fontSize: '13px', color: '#ffbd72' }}>
+            Scanning Database...<br />
+            <span style={{ display: 'block', wordBreak: 'break-all', marginTop: '4px', color: 'hsl(var(--foreground))' }}>
+              Key: {currentKey}
+            </span>
+            <span style={{ display: 'block', marginTop: '4px', fontWeight: 'bold' }}>
+              Speed: {keysPerSec.toLocaleString()} keys/sec
+            </span>
           </div>
-          <span className="puzzle-ref-count">
-            <span aria-hidden="true" />
-            {puzzles.length} of {BITCOIN_PUZZLE_COUNT} puzzles
-          </span>
-        </div>
-        <label className="puzzle-ref-search">
-          <Search aria-hidden="true" />
-          <span className="sr-only">Search puzzles by number or key</span>
-          <input
-            type="search"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search puzzle number or hex key"
-            inputMode="search"
-            data-testid="input-puzzle-search"
-          />
-        </label>
-        <div className="puzzle-ref-table-wrap">
-          <table className="puzzle-ref-table">
-            <thead>
-              <tr>
-                <th scope="col">Puzzle</th>
-                <th scope="col">Private key range (hex)</th>
-                <th scope="col">Key size</th>
-                <th scope="col"><span className="sr-only">Actions</span></th>
-              </tr>
-            </thead>
-            <tbody>
-              {puzzles.map(({ number, startHex, endHex }) => (
-                <tr key={number} data-testid={`row-puzzle-${number}`}>
-                  <th scope="row">#{number}</th>
-                  <td className="puzzle-ref-range">
-                    <code>{startHex}</code>
-                    <span aria-hidden="true"> - </span>
-                    <code>{endHex}</code>
-                  </td>
-                  <td>{number} bit{number === 1 ? '' : 's'}</td>
-                  <td className="puzzle-ref-action">
-                    <button
-                      type="button"
-                      onClick={() => void copyRange(number, startHex, endHex)}
-                      aria-label={`Copy key range for puzzle ${number}`}
-                      title={`Copy range for puzzle ${number}`}
-                      data-testid={`button-copy-puzzle-${number}`}
-                    >
-                      {copiedPuzzle === number ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {puzzles.length === 0 && (
-            <p className="puzzle-ref-empty">No puzzles match that search.</p>
+        ) : (
+          <div style={{ fontSize: '13px', color: 'hsl(var(--foreground))' }}>{status === 'Ready' ? 'Idle. Ready to scan.' : `Completed with status: ${status}`}</div>
+        )}
+      </section>
+
+      {match && (
+        <div style={{ marginTop: '20px', padding: '16px', background: 'hsl(var(--background))', border: '2px solid #e77732', borderRadius: '10px' }}>
+          <div style={{ color: '#ffbd72', fontWeight: 700, marginBottom: '8px' }}><Sparkles size={14} style={{ display: 'inline', marginRight: 4 }} /> MATCH FOUND!</div>
+          
+          <div style={{ fontSize: '12px', marginBottom: '6px' }}>
+            <span style={{ color: 'hsl(var(--muted-foreground))' }}>Address:</span>
+            <code style={{ display: 'block', color: 'hsl(var(--foreground))', wordBreak: 'break-all' }}>{match.address}</code>
+          </div>
+
+          <div style={{ fontSize: '12px', marginTop: '8px' }}>
+            <span style={{ color: 'hsl(var(--muted-foreground))' }}>Private Key (Hex):</span>
+            <code style={{ display: 'block', wordBreak: 'break-all', color: 'hsl(var(--foreground))', marginTop: '2px' }}>{match.privateKeyHex}</code>
+          </div>
+
+          {match.privateKeyWif && (
+            <div style={{ fontSize: '12px', marginTop: '8px' }}>
+              <span style={{ color: 'hsl(var(--muted-foreground))' }}>Private Key (WIF):</span>
+              <code style={{ display: 'block', wordBreak: 'break-all', color: 'hsl(var(--foreground))', marginTop: '2px' }}>{match.privateKeyWif}</code>
+            </div>
           )}
         </div>
-        <p className="puzzle-ref-note" role="status" aria-live="polite">
-          {copyError
-            ? 'Clipboard access is unavailable in this browser.'
-            : copiedPuzzle
-              ? `Puzzle ${copiedPuzzle} range copied.`
-              : 'Key ranges are calculated locally from each puzzle number.'}
-        </p>
-      </section>
-      <footer className="donation-page-footer">
-        <DonationAddress />
-      </footer>
+      )}
     </main>
   );
-}
+                }
