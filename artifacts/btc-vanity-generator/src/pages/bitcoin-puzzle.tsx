@@ -28,6 +28,7 @@ export default function BitcoinPuzzlePage() {
       workersRef.current = [];
       setSearching(false);
       setStatus('Stopped');
+      setNotice('Search stopped by user.');
       return;
     }
 
@@ -36,7 +37,7 @@ export default function BitcoinPuzzlePage() {
     setMatch(null);
     setKeysPerSec(0);
     setCurrentKey(startHex);
-    setNotice('');
+    setNotice('Scanning database for target addresses...');
 
     try {
       const startBig = BigInt(`0x${startHex.trim().replace(/^0x/i, '')}`);
@@ -70,10 +71,11 @@ export default function BitcoinPuzzlePage() {
             setKeysPerSec(totalSpeed);
             setCurrentKey(message.currentKeyHex);
           } else if (message.type === 'found') {
+            // 🛠️ هنا كيبان الـ Match فـ الشاشة
             setMatch(message.result);
             setStatus('Found');
             setSearching(false);
-            setNotice('Match found in database!');
+            setNotice(`🎯 Match found: ${message.result.address}`);
             workersRef.current.forEach(w => w.terminate());
             workersRef.current = [];
           } else if (message.type === 'exhausted') {
@@ -81,7 +83,7 @@ export default function BitcoinPuzzlePage() {
             if (finishedWorkers === numThreads) {
               setStatus('Exhausted');
               setSearching(false);
-              setNotice('Range fully scanned. No match found.');
+              setNotice('Range fully scanned. No match found in database.');
               workersRef.current.forEach(w => w.terminate());
               workersRef.current = [];
             }
@@ -212,4 +214,4 @@ export default function BitcoinPuzzlePage() {
       )}
     </main>
   );
-          }
+}
