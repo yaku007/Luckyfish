@@ -1,11 +1,11 @@
-import { useRef, useState, useEffect, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { Zap, Sparkles } from 'lucide-react';
 import { MULTI_CHAIN_OPTIONS, type MultiChainName } from '@/lib/multichain';
-import './bitcoin-range-lookup.css'; // كنستعملو نفس الـ CSS
+import './bitcoin-range-lookup.css';
 
 export default function BitcoinPuzzlePage() {
   const [startHex, setStartHex] = useState('1');
-  const [endHex, setEndHex] = useState('5000');
+  const [endHex, setEndHex] = useState('100000');
   const [chain, setChain] = useState<MultiChainName>('btc');
   
   const [status, setStatus] = useState('Ready');
@@ -28,7 +28,6 @@ export default function BitcoinPuzzlePage() {
       workersRef.current = [];
       setSearching(false);
       setStatus('Stopped');
-      setNotice('Scan stopped.');
       return;
     }
 
@@ -213,4 +212,4 @@ export default function BitcoinPuzzlePage() {
       )}
     </main>
   );
-                }
+          }
