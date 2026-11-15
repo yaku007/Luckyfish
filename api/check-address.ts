@@ -4,7 +4,6 @@ import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // تأكد أن الطلب هو POST
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -16,7 +15,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'Invalid addresses' });
     }
 
-    // قلب على العناوين فـ الداتابيز
     const foundAddresses = await prisma.address.findMany({
       where: {
         address: { in: addresses },
@@ -24,7 +22,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       select: { address: true },
     });
 
-    // رجع العناوين اللي لقا
     return res.status(200).json({
       matched: foundAddresses.map((a: { address: string }) => a.address),
     });
@@ -32,4 +29,4 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     console.error(error);
     return res.status(500).json({ error: 'Server Error' });
   }
-  }
+}
