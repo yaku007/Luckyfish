@@ -11,6 +11,16 @@ import {
 const BASE58_ALPHABET =
   '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 
+const CHAIN_COIN_TYPES: Record<MultiChainName, number> = {
+  btc: 0,
+  eth: 60,
+  bnb: 714,
+  polygon: 966,
+};
+
+const PROGRESS_INTERVAL = 100;
+const YIELD_INTERVAL = 2_000;
+
 export type HdAddressProgress = {
   index: number;
   address: string;
@@ -22,24 +32,31 @@ export type HdAddressMatch = {
   address: string;
 };
 
-function base58Encode(bytes: Uint8Array): string {
-  let value = BigInt(
-    `0x${Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')}`,
-  );
-  let encoded = '';
+// ============================================================================
+// أدوات مساعدة (محسّنة)
+// ============================================================================
 
+function bytesToBigInt(bytes: Uint8Array): bigint {
+  let result = 0n;
+  for (let i = 0; i < bytes.length; i += 1) {
+    result = (result << 8n) | BigInt(bytes[i]);
+  }
+  return result;
+}
+
+function base58Encode(bytes: Uint8Array): string {
+  let value = bytesToBigInt(bytes);
+  let encoded = '';
   while (value > 0n) {
     const digit = Number(value % 58n);
     encoded = BASE58_ALPHABET[digit] + encoded;
     value /= 58n;
   }
-
   let leadingZeroes = 0;
   while (leadingZeroes < bytes.length && bytes[leadingZeroes] === 0) {
     leadingZeroes += 1;
   }
-
-  return `${'1'.repeat(leadingZeroes)}${encoded}`;
+  return '1'.repeat(leadingZeroes) + encoded;
 }
 
 function legacyAddressFromPublicKey(publicKey: Uint8Array): string {
@@ -47,13 +64,27 @@ function legacyAddressFromPublicKey(publicKey: Uint8Array): string {
   const payload = new Uint8Array(21);
   payload[0] = 0;
   payload.set(publicKeyHash, 1);
-
-  const checksum = sha256(sha256(payload)).slice(0, 4);
-  const addressBytes = new Uint8Array(payload.length + checksum.length);
-  addressBytes.set(payload);
-  addressBytes.set(checksum, payload.length);
+  const checksum = sha256(sha256(payload)).subarray(0, 4);
+  const addressBytes = new Uint8Array(25);
+  addressBytes.set(payload, 0);
+  addressBytes.set(checksum, 21);
   return base58Encode(addressBytes);
 }
+
+// yield متوافق مع Workers + Node + Browser
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof globalThis.setTimeout === 'function') {
+      globalThis.setTimeout(resolve, 0);
+    } else {
+      void Promise.resolve().then(resolve);
+    }
+  });
+}
+
+// ============================================================================
+// الدالة الرئيسية
+// ============================================================================
 
 export async function findHdAddressByXpub({
   xpub,
@@ -75,6 +106,7 @@ export async function findHdAddressByXpub({
   const normalizedKey = xpub.trim();
   const normalizedTarget = targetAddress.trim();
 
+  // ========== التحقق ==========
   if (!normalizedKey.startsWith('xpub')) {
     throw new Error('Enter a mainnet xpub. Private extended keys are not accepted.');
   }
@@ -104,15 +136,33 @@ export async function findHdAddressByXpub({
   if (master.privateKey) {
     throw new Error('Enter a public xpub, not a private extended key.');
   }
+  if (!master.publicKey) {
+    throw new Error('The extended key has no public key.');
+  }
 
-  const startedAt = performance.now();
+  // ========== BIP44: m/44'/coin'/0'/0 ==========
+  const isBtc = chain === 'btc';
+  const coinType = CHAIN_COIN_TYPES[chain];
+
+  let accountNode: HDKey;
+  try {
+    accountNode = master.derive(`m/44'/${coinType}'/0'/0`);
+  } catch {
+    throw new Error('Could not derive the BIP44 account path.');
+  }
+
+  // ========== الحلقة ==========
+  const startedAt = (globalThis.performance?.now ?? Date.now)();
   let checked = 0;
+  let lastProgressTime = startedAt;
+  let lastProgressChecked = 0;
+
   for (let index = startIndex; index <= endIndex; index += 1) {
     if (signal?.aborted) throw new Error('Search stopped.');
 
     let child: HDKey;
     try {
-      child = master.derive(chain === 'btc' ? `m/0/0/${index}` : `m/0/${index}`);
+      child = accountNode.deriveChild(index);
     } catch {
       throw new Error(`Could not derive address index ${index}.`);
     }
@@ -121,27 +171,33 @@ export async function findHdAddressByXpub({
       throw new Error(`No public key was available at index ${index}.`);
     }
 
-    const address = chain === 'btc'
+    const address = isBtc
       ? legacyAddressFromPublicKey(child.publicKey)
       : publicKeyToEvmAddress(child.publicKey);
+
     if (address === normalizedTarget) {
       return { index, address };
     }
 
     checked += 1;
-    if (onProgress && checked % 100 === 0) {
-      const elapsedSeconds = Math.max((performance.now() - startedAt) / 1000, 0.001);
+
+    if (onProgress && checked % PROGRESS_INTERVAL === 0) {
+      const now = (globalThis.performance?.now ?? Date.now)();
+      const intervalSeconds = Math.max((now - lastProgressTime) / 1000, 0.001);
+      const intervalChecked = checked - lastProgressChecked;
       onProgress({
         index,
         address,
-        keysPerSecond: Math.floor(checked / elapsedSeconds),
+        keysPerSecond: Math.floor(intervalChecked / intervalSeconds),
       });
+      lastProgressTime = now;
+      lastProgressChecked = checked;
     }
 
-    if (checked % 1_000 === 0) {
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+    if (checked % YIELD_INTERVAL === 0) {
+      await yieldToEventLoop();
     }
   }
 
   return null;
-    }
+}
