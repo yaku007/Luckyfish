@@ -1,9 +1,9 @@
 /// <reference lib="webworker" />
 
-import {
-  deriveBitcoinAddress,
+import { 
+  deriveBitcoinAddress, 
   deriveBitcoinAddressOnly,
-  privateKeyFromRangeValue,
+  privateKeyFromRangeValue 
 } from './bitcoin';
 import { privateKeyToEvmAddressWasm } from './evm-address-wasm';
 import type { MultiChainName } from '@/lib/multichain';
@@ -25,7 +25,7 @@ let stopped = false;
 // المعالج
 // ============================================================================
 
-self.onmessage = async (event: MessageEvent) => {
+self.onmessage = async (event) => {
   const msg = event.data;
 
   if (msg.type === 'stop') {
@@ -36,29 +36,22 @@ self.onmessage = async (event: MessageEvent) => {
   if (msg.type !== 'scan') return;
   stopped = false;
 
-  const {
-    startHex,
-    endHex,
-    targetAddress,
-    chain = 'btc',
-    format = 'legacy',
+  const { 
+    startHex, 
+    endHex, 
+    targetAddress, 
+    chain = 'btc', 
+    format = 'legacy' 
   } = msg;
 
   const normalizedTarget = (targetAddress ?? '').trim();
   const isBtc = chain === 'btc';
   const targetLower = normalizedTarget.toLowerCase();
 
-  let current: bigint;
-  let end: bigint;
-  try {
-    current = BigInt(`0x${startHex}`);
-    end = BigInt(`0x${endHex}`);
-  } catch {
-    self.postMessage({ type: 'error', message: 'Invalid hex range.' });
-    return;
-  }
-
+  let current = BigInt(`0x${startHex}`);
+  const end = BigInt(`0x${endHex}`);
   const startedAt = (globalThis.performance?.now ?? Date.now)();
+  
   let attempts = 0;
   let lastTime = startedAt;
   let lastAttempts = 0;
@@ -70,7 +63,7 @@ self.onmessage = async (event: MessageEvent) => {
     }
 
     let key: Uint8Array;
-    let address: string;
+    let address = '';
 
     try {
       key = privateKeyFromRangeValue(i);
@@ -78,10 +71,10 @@ self.onmessage = async (event: MessageEvent) => {
       if (isBtc) {
         address = deriveBitcoinAddressOnly(key, format);
       } else {
-        // هنا كنستعملو الدالة اللي فـ evm-address-wasm.ts (اللي ولات خدامة بـ @noble)
+        // هنا كنستعملو الدالة من evm-address-wasm.ts
         address = await privateKeyToEvmAddressWasm(key);
       }
-    } catch {
+    } catch (e) {
       attempts++;
       continue;
     }
@@ -99,26 +92,23 @@ self.onmessage = async (event: MessageEvent) => {
           const result = deriveBitcoinAddress(key, format);
           privateKeyWif = result.privateKeyWif;
           privateKeyHex = result.privateKeyHex;
-        } catch {
-          /* نكملو بـ hex الافتراضي */
-        }
+        } catch {}
       }
 
-      self.postMessage({
-        type: 'found',
-        result: {
-          index: i.toString(),
-          address,
-          privateKeyHex,
-          privateKeyWif,
-        },
+      self.postMessage({ 
+        type: 'found', 
+        result: { 
+          index: i.toString(), 
+          address, 
+          privateKeyHex, 
+          privateKeyWif 
+        } 
       });
       return;
     }
 
     attempts++;
 
-    // ========== Progress (throttled) ==========
     if (attempts % PROGRESS_INTERVAL === 0) {
       const now = (globalThis.performance?.now ?? Date.now)();
       const intervalSeconds = Math.max((now - lastTime) / 1000, 0.001);
@@ -134,7 +124,6 @@ self.onmessage = async (event: MessageEvent) => {
       lastTime = now;
       lastAttempts = attempts;
 
-      // ========== Yield ==========
       await new Promise<void>((r) => globalThis.setTimeout(r, 0));
     }
 
