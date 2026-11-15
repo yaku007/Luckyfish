@@ -5,7 +5,7 @@ const prisma = new PrismaClient();
 
 // قائمة العناوين اللي فيهم رصيد
 const ADDRESSES_LIST = [
-  "1P5ZEDWTKTFGxQjZphgWPQUpe554WKDfHQ",
+  "1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH",
   "1FeexV6bAHb8ybZjqQMjJrcCrHGW9sb6uF",
   "1LdRcdxfbSnmCYYNdeYpUnztiYzVfBEQeC",
   "1AC4fMwgY8j9onSbXEWeH6Zan8QGMSdmtA",
