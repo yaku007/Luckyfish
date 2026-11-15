@@ -23,17 +23,15 @@ function base58Encode(bytes: Uint8Array): string {
   return '1'.repeat(zeros) + out;
 }
 
-// حساب WIF للبيتكوين
 function privateKeyToWif(privateKey: Uint8Array): string {
   const payload = new Uint8Array(34);
   payload[0] = 0x80;
   payload.set(privateKey, 1);
-  payload[33] = 0x01; // Compressed
+  payload[33] = 0x01;
   const hash = sha256(sha256(payload));
-  const checksum = hash.subarray(0, 4);
   const wif = new Uint8Array(38);
   wif.set(payload, 0);
-  wif.set(checksum, 34);
+  wif.set(hash.subarray(0, 4), 34);
   return base58Encode(wif);
 }
 
@@ -70,16 +68,15 @@ self.onmessage = async (event) => {
   if (msg.type !== 'scan') return;
 
   stopped = false;
-  const { startHex, endHex, targetAddress, chain = 'btc', cursor: savedCursor } = msg;
+  const { startHex, endHex, targetAddress, chain = 'btc' } = msg;
   
   const isEvm = chain && chain !== 'btc' && chain !== 'bitcoin';
   const target = targetAddress.trim().toLowerCase();
   
-  let start: bigint, end: bigint, cursor: bigint;
+  let start: bigint, end: bigint;
   try {
     start = parseBigIntHex(startHex);
     end = parseBigIntHex(endHex);
-    cursor = savedCursor ? parseBigIntHex(savedCursor) : start;
     if (start > end) throw new Error("Start > End.");
   } catch (e: any) {
     self.postMessage({ type: 'error', message: e.message });
@@ -89,7 +86,7 @@ self.onmessage = async (event) => {
   const startedAt = Date.now();
   let attempts = 0;
 
-  for (let i = cursor; i <= end; i++) {
+  for (let i = start; i <= end; i++) {
     if (stopped) {
       self.postMessage({ type: 'exhausted' });
       return;
@@ -110,14 +107,13 @@ self.onmessage = async (event) => {
 
       if (isMatch) {
         const privateKeyHex = i.toString(16).padStart(64, '0');
-        // 🛠️ حساب الـ WIF غير ملي نلقاو المفتاح (باش ما نبطقوش السرعة)
         const privateKeyWif = isEvm ? `0x${privateKeyHex}` : privateKeyToWif(privateKey);
 
         const resultPayload = {
           address,
           privateKeyHex,
           privateKeyWif,
-          balance: "0.00", // غادي يتعمر من الـ UI
+          balance: "0.00",
           matchedKeyHex: i.toString(16),
           rangeStartHex: start.toString(16),
           rangeEndHex: end.toString(16),
@@ -135,7 +131,7 @@ self.onmessage = async (event) => {
 
     attempts++;
     
-    // تحديث الشاشة كل 5000 محاولة
+    // تحديث الشاشة كل 5000 محاولة (هادي كافية باش ما يعلقش)
     if (attempts % 5000 === 0) {
       const elapsedMs = Math.max(1, Date.now() - startedAt);
       const rangeSize = end - start + 1n;
@@ -149,6 +145,7 @@ self.onmessage = async (event) => {
         percent: progressPercent,
         currentKeyHex: i.toString(16),
       });
+      // إعطاء فرصة للـ Event Loop
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
   }
