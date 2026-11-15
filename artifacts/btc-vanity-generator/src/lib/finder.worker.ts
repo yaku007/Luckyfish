@@ -5,13 +5,22 @@ import {
   deriveBitcoinAddressOnly,
   privateKeyFromRangeValue,
 } from './bitcoin';
-import { privateKeyToEvmAddressWasm } from './evm-address-wasm';
+import { secp256k1 } from '@noble/curves/secp256k1.js';
+import { keccak_256 } from '@noble/hashes/sha3.js';
 import type { MultiChainName } from '@/lib/multichain';
 
 const PROGRESS_INTERVAL = 5000;
 const YIELD_INTERVAL = 5000;
 
 let stopped = false;
+
+function privateKeyToEvmAddress(privateKey: Uint8Array): string {
+  const pubKey = secp256k1.getPublicKey(privateKey, false);
+  const hash = keccak_256(pubKey.subarray(1));
+  let hex = '';
+  for (let i = 12; i < 32; i++) hex += hash[i].toString(16).padStart(2, '0');
+  return `0x${hex}`;
+}
 
 self.onmessage = async (event: MessageEvent) => {
   const msg = event.data;
@@ -59,13 +68,9 @@ self.onmessage = async (event: MessageEvent) => {
 
     try {
       key = privateKeyFromRangeValue(i);
-
-      if (isBtc) {
-        address = deriveBitcoinAddressOnly(key, format);
-      } else {
-        // WASM أسرع 2-5x
-        address = await privateKeyToEvmAddressWasm(key);
-      }
+      address = isBtc
+        ? deriveBitcoinAddressOnly(key, format)
+        : privateKeyToEvmAddress(key); // ✅ بلا WASM
     } catch {
       attempts++;
       continue;
