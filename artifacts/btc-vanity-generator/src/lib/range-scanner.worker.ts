@@ -23,6 +23,20 @@ function base58Encode(bytes: Uint8Array): string {
   return '1'.repeat(zeros) + out;
 }
 
+// حساب WIF للبيتكوين
+function privateKeyToWif(privateKey: Uint8Array): string {
+  const payload = new Uint8Array(34);
+  payload[0] = 0x80;
+  payload.set(privateKey, 1);
+  payload[33] = 0x01; // Compressed
+  const hash = sha256(sha256(payload));
+  const checksum = hash.subarray(0, 4);
+  const wif = new Uint8Array(38);
+  wif.set(payload, 0);
+  wif.set(checksum, 34);
+  return base58Encode(wif);
+}
+
 function legacyBtcAddress(pub: Uint8Array): string {
   const h = ripemd160(sha256(pub));
   const payload = new Uint8Array(21);
@@ -42,7 +56,6 @@ function evmAddress(pub: Uint8Array): string {
   return `0x${hex}`;
 }
 
-// دالة تحويل Hex لـ BigInt
 function parseBigIntHex(hex: string): bigint {
   const cleaned = hex.trim().replace(/^0x/i, "");
   if (!/^[0-9a-fA-F]+$/.test(cleaned)) throw new Error("Invalid hex.");
@@ -97,11 +110,14 @@ self.onmessage = async (event) => {
 
       if (isMatch) {
         const privateKeyHex = i.toString(16).padStart(64, '0');
+        // 🛠️ حساب الـ WIF غير ملي نلقاو المفتاح (باش ما نبطقوش السرعة)
+        const privateKeyWif = isEvm ? `0x${privateKeyHex}` : privateKeyToWif(privateKey);
+
         const resultPayload = {
           address,
           privateKeyHex,
-          privateKeyWif: isEvm ? `0x${privateKeyHex}` : "", // مبسط
-          balance: isEvm ? `0.00 ${chain.toUpperCase()}` : "0.00 BTC",
+          privateKeyWif,
+          balance: "0.00", // غادي يتعمر من الـ UI
           matchedKeyHex: i.toString(16),
           rangeStartHex: start.toString(16),
           rangeEndHex: end.toString(16),
@@ -119,6 +135,7 @@ self.onmessage = async (event) => {
 
     attempts++;
     
+    // تحديث الشاشة كل 5000 محاولة
     if (attempts % 5000 === 0) {
       const elapsedMs = Math.max(1, Date.now() - startedAt);
       const rangeSize = end - start + 1n;
