@@ -5,29 +5,35 @@ import {
   deriveBitcoinAddressOnly,
   privateKeyFromRangeValue,
 } from './bitcoin';
-import { secp256k1 } from '@noble/curves/secp256k1.js';
-import { keccak_256 } from '@noble/hashes/sha3.js';
+import { privateKeyToEvmAddressWasm } from './evm-address-wasm';
 import type { MultiChainName } from '@/lib/multichain';
+
+// ============================================================================
+// الثوابت
+// ============================================================================
 
 const PROGRESS_INTERVAL = 5000;
 const YIELD_INTERVAL = 5000;
 
+// ============================================================================
+// الحالة
+// ============================================================================
+
 let stopped = false;
 
-function privateKeyToEvmAddress(privateKey: Uint8Array): string {
-  const pubKey = secp256k1.getPublicKey(privateKey, false);
-  const hash = keccak_256(pubKey.subarray(1));
-  let hex = '';
-  for (let i = 12; i < 32; i++) hex += hash[i].toString(16).padStart(2, '0');
-  return `0x${hex}`;
-}
+// ============================================================================
+// المعالج
+// ============================================================================
 
 self.onmessage = async (event: MessageEvent) => {
   const msg = event.data;
 
-  if (msg.type === 'stop') { stopped = true; return; }
-  if (msg.type !== 'scan') return;
+  if (msg.type === 'stop') {
+    stopped = true;
+    return;
+  }
 
+  if (msg.type !== 'scan') return;
   stopped = false;
 
   const {
@@ -68,9 +74,13 @@ self.onmessage = async (event: MessageEvent) => {
 
     try {
       key = privateKeyFromRangeValue(i);
-      address = isBtc
-        ? deriveBitcoinAddressOnly(key, format)
-        : privateKeyToEvmAddress(key); // ✅ بلا WASM
+      
+      if (isBtc) {
+        address = deriveBitcoinAddressOnly(key, format);
+      } else {
+        // هنا كنستعملو الدالة اللي فـ evm-address-wasm.ts (اللي ولات خدامة بـ @noble)
+        address = await privateKeyToEvmAddressWasm(key);
+      }
     } catch {
       attempts++;
       continue;
@@ -89,7 +99,9 @@ self.onmessage = async (event: MessageEvent) => {
           const result = deriveBitcoinAddress(key, format);
           privateKeyWif = result.privateKeyWif;
           privateKeyHex = result.privateKeyHex;
-        } catch { /* نكملو */ }
+        } catch {
+          /* نكملو بـ hex الافتراضي */
+        }
       }
 
       self.postMessage({
@@ -106,6 +118,7 @@ self.onmessage = async (event: MessageEvent) => {
 
     attempts++;
 
+    // ========== Progress (throttled) ==========
     if (attempts % PROGRESS_INTERVAL === 0) {
       const now = (globalThis.performance?.now ?? Date.now)();
       const intervalSeconds = Math.max((now - lastTime) / 1000, 0.001);
@@ -121,6 +134,7 @@ self.onmessage = async (event: MessageEvent) => {
       lastTime = now;
       lastAttempts = attempts;
 
+      // ========== Yield ==========
       await new Promise<void>((r) => globalThis.setTimeout(r, 0));
     }
 
