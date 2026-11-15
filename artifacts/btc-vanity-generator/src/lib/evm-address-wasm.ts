@@ -1,43 +1,18 @@
-/**
- * WASM-accelerated EVM address derivation.
- * كيستعمل @hazae41/secp256k1-wasm (Rust k256 → WASM)
- * أسرع 2-5x من @noble/curves JS.
- */
-
+import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { keccak_256 } from '@noble/hashes/sha3.js';
 
-// تحميل lazy
-let wasm: typeof import('@hazae41/secp256k1-wasm') | null = null;
-
-async function loadWasm() {
-  if (!wasm) {
-    wasm = await import('@hazae41/secp256k1-wasm');
-    await wasm.secp256k1Wasm.load();
-  }
-  return wasm;
-}
-
 /**
- * private key → EVM address (WASM)
- * - privateKey: 32 bytes
- * - returns: 0x + 40 hex
+ * توليد عنوان EVM من مفتاح خاص.
+ * كنستعملو @noble/curves اللي ديجا مثبتة فـ المشروع
+ * باش نتجنبو مشاكل Vercel و WASM imports.
  */
+
 export async function privateKeyToEvmAddressWasm(
   privateKey: Uint8Array,
 ): Promise<string> {
-  const w = await loadWasm();
-
-  // WASM: private → public (compressed 33 bytes)
-  using keypair = new w.secp256k1Wasm.Secp256k1SigningKey(privateKey);
-  using identity = keypair.verifying_key();
-  const compressed = identity.to_bytes();
-
-  // decompress → uncompressed 64 bytes (بدون 0x04)
-  const { secp256k1 } = await import('@noble/curves/secp256k1.js');
-  const uncompressed = secp256k1.Point.fromBytes(compressed).toBytes(false).subarray(1);
-
-  // keccak256 → آخر 20 بايت
-  const hash = keccak_256(uncompressed);
+  // كنخدمو async باش ما نضطروش نبدلو finder.worker.ts
+  const pubKey = secp256k1.getPublicKey(privateKey, false); // Uncompressed
+  const hash = keccak_256(pubKey.subarray(1)); // نحيّدو 0x04
   let hex = '';
   for (let i = 12; i < 32; i++) {
     hex += hash[i].toString(16).padStart(2, '0');
@@ -45,9 +20,6 @@ export async function privateKeyToEvmAddressWasm(
   return `0x${hex}`;
 }
 
-/**
- * batch: عدة مفاتيح → عدة عناوين
- */
 export async function privateKeysToEvmAddressesWasm(
   privateKeys: Uint8Array[],
 ): Promise<string[]> {
