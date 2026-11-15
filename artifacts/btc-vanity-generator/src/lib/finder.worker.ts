@@ -7,20 +7,18 @@ import {
 } from './bitcoin';
 import { privateKeyToEvmAddressSync } from './evm-address-wasm';
 
-// متغير باش نعرفو واش المستعمل دار Stop
 let stopped = false;
 
 self.onmessage = async (event) => {
   const msg = event.data;
 
-  // 🛑 التحقق من رسالة التوقف
   if (msg.type === 'stop') {
     stopped = true;
     return;
   }
 
   if (msg.type !== 'scan') return;
-  stopped = false; // تصفير الحالة عند بداية بحث جديد
+  stopped = false;
 
   const { startHex, endHex, targetAddress, chain = 'btc', format = 'legacy' } = msg;
   
@@ -28,7 +26,6 @@ self.onmessage = async (event) => {
   const targetLower = normalizedTarget.toLowerCase();
   const isBtc = chain === 'btc';
   
-  // 🛡️ حماية من الأخطاء فـ تحويل النطاق
   let current: bigint;
   let end: bigint;
   try {
@@ -48,7 +45,6 @@ self.onmessage = async (event) => {
   let attempts = 0;
 
   for (let i = current; i <= end; i++) {
-    // 🛑 التحقق من التوقف فـ كل دورة
     if (stopped) {
       self.postMessage({ type: 'exhausted' });
       return;
@@ -63,7 +59,6 @@ self.onmessage = async (event) => {
       if (isBtc) {
         address = deriveBitcoinAddressOnly(key, format);
       } else {
-        // دالة sync سريعة جداً (بلا await)
         address = privateKeyToEvmAddressSync(key);
       }
     } catch (e: any) {
@@ -101,11 +96,9 @@ self.onmessage = async (event) => {
 
     attempts++;
     
-    // تحديث الشاشة كل 5000 محاولة
-    if (attempts % 5000 === 0) {
+    // 🚀 تحديث الشاشة كل 100 محاولة (بدل 5000) باش ما يعلقش فـ النطاقات الصغيرة
+    if (attempts % 100 === 0) {
       const elapsedSeconds = Math.max((Date.now() - startedAt) / 1000, 0.001);
-      
-      // ✅ زدنا 0x باش يبان الرقم بشكل احترافي
       self.postMessage({
         type: 'progress',
         index: `0x${i.toString(16)}`,
@@ -113,6 +106,7 @@ self.onmessage = async (event) => {
         keysPerSecond: Math.floor(attempts / elapsedSeconds),
       });
       
+      // إعطاء فرصة للـ Event Loop
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
   }
