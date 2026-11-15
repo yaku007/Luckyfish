@@ -5,14 +5,12 @@ import { MULTI_CHAIN_OPTIONS, type MultiChainName } from '@/lib/multichain';
 import { saveSearchProgress, getSearchProgress } from '@/lib/persistence';
 import './bitcoin-range-lookup.css';
 
-// دالة جديدة باش نجيبو الرصيد من Blockchain.com (بحال صفحة Balance Check)
 async function fetchBitcoinBalance(address: string): Promise<string> {
   try {
     const response = await fetch(`https://blockchain.info/q/addressbalance/${address}`);
     if (!response.ok) return "0.00000000";
     const satoshi = await response.json();
-    const btc = satoshi / 100000000;
-    return btc.toFixed(8);
+    return (satoshi / 100000000).toFixed(8);
   } catch (e) {
     return "Error fetching balance";
   }
@@ -21,9 +19,9 @@ async function fetchBitcoinBalance(address: string): Promise<string> {
 export default function BitcoinRangeLookupPage({ active }: { active: boolean }) {
   const [startHex, setStartHex] = useState('1');
   const [endHex, setEndHex] = useState('5000');
-  const [chain, setChain] = useState<MultiChainName>('btc'); // بدلناها لـ btc باش الرصيد يخدم
+  const [chain, setChain] = useState<MultiChainName>('btc');
   const [targetAddress, setTargetAddress] = useState('');
-  const [engine, setEngine] = useState<'cpu' | 'webgl' | 'webgpu'>('cpu'); // بدلناها لـ cpu باش تخدم دابا
+  const [engine, setEngine] = useState<'cpu' | 'webgl' | 'webgpu'>('cpu');
   const [savedCursor, setSavedCursor] = useState<string | null>(null);
 
   const [status, setStatus] = useState('Ready');
@@ -36,7 +34,7 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
   const [searching, setSearching] = useState(false);
   const [showPrivateKey, setShowPrivateKey] = useState(false);
 
-  const workerRef = useRef<Worker | null>(null);
+  const workersRef = useRef<Worker[]>([]); // 🚀 Multi-Workers
 
   useEffect(() => {
     if (active) document.title = 'Isolated Hardware Range Scanner | LUCKY BTC';
@@ -50,26 +48,26 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
   }, [active]);
 
   const copyValue = async (value: string) => {
-    try {
-      await navigator.clipboard.writeText(value);
-      setNotice('Copied to clipboard!');
-    } catch {
-      setNotice('Clipboard copy failed.');
-    }
+    try { await navigator.clipboard.writeText(value); setNotice('Copied!'); } catch { setNotice('Failed.'); }
   };
 
   function handleResume() {
     if (savedCursor) {
       setStartHex(savedCursor);
-      setNotice('Resumed from previous cursor state.');
+      setNotice('Resumed from previous state.');
       setSavedCursor(null);
     }
   }
 
   function handleSearch(event: FormEvent<HTMLFormElement>, resumeKey?: string) {
     event.preventDefault();
+    
     if (searching) {
-      workerRef.current?.terminate();
+      workersRef.current.forEach(w => {
+        w.postMessage({ type: 'stop' });
+        w.terminate();
+      });
+      workersRef.current = [];
       setSearching(false);
       setStatus('Stopped');
       setNotice('Scan stopped by user.');
@@ -91,73 +89,93 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
     setProgressPercent(0);
 
     try {
-      const worker = new Worker(new URL('../lib/range-scanner.worker.ts', import.meta.url), { type: 'module' });
-      workerRef.current = worker;
+      const startBig = BigInt(`0x${(resumeKey || startHex).trim().replace(/^0x/i, '')}`);
+      const endBig = BigInt(`0x${endHex.trim().replace(/^0x/i, '')}`);
+      const totalKeys = endBig - startBig + 1n;
 
-      // هنا كنستقبلو الرسائل من الـ Worker
-      worker.onmessage = async (event) => {
-        const message = event.data;
+      if (totalKeys <= 0n) throw new Error("End must be >= Start");
 
-        if (message.type === 'found') {
-          setAttempts(message.attempts);
-          
-          // 1. ملي كيلقى المطابقة، كنجيبو الرصيد
-          const balance = chain === 'btc' ? await fetchBitcoinBalance(message.result.address) : 'N/A';
-          
-          // 2. كنحدثو الحالة (State) باش يبان كلشي
-          setMatch({
-            ...message.result,
-            balance: balance
-          });
-          
-          setStatus('Found');
-          setSearching(false);
-          setNotice('Target private key found successfully!');
-          worker.terminate();
-        } else if (message.type === 'progress') {
-          setAttempts(message.attempts);
-          setKeysPerSec(message.speed || 0);
-          setCurrentKey(message.currentKeyHex || '');
-          if (message.percent !== undefined) setProgressPercent(message.percent);
+      // 🚀 توزيع الشغل على 8 Threads
+      const numThreads = Math.min(8, Math.max(4, navigator.hardwareConcurrency || 4));
+      const chunkSize = totalKeys / BigInt(numThreads);
+      
+      let totalSpeed = 0;
+      let finishedWorkers = 0;
+      const speedMap = new Map<Worker, number>();
 
-          void saveSearchProgress('range_lookup_state', {
-            cursor: message.currentKeyHex,
-            targetAddress,
-            chain,
-            timestamp: Date.now()
-          });
-        } else if (message.type === 'exhausted') {
-          setStatus('Exhausted');
-          setSearching(false);
-          setNotice('Range fully scanned. No match found.');
-          worker.terminate();
-        } else if (message.type === 'error') {
+      for (let i = 0; i < numThreads; i++) {
+        const chunkStart = startBig + BigInt(i) * chunkSize;
+        let chunkEnd = chunkStart + chunkSize - 1n;
+        if (i === numThreads - 1) chunkEnd = endBig;
+
+        const worker = new Worker(new URL('../lib/range-scanner.worker.ts', import.meta.url), { type: 'module' });
+        workersRef.current.push(worker);
+        speedMap.set(worker, 0);
+
+        worker.onmessage = async (event) => {
+          const message = event.data;
+
+          if (message.type === 'progress') {
+            speedMap.set(worker, message.speed);
+            totalSpeed = Array.from(speedMap.values()).reduce((a, b) => a + b, 0);
+            setKeysPerSec(totalSpeed);
+            setCurrentKey(message.currentKeyHex);
+            setAttempts(prev => prev + message.attempts);
+            if (message.percent !== undefined) setProgressPercent(message.percent);
+            
+            void saveSearchProgress('range_lookup_state', {
+              cursor: message.currentKeyHex,
+              targetAddress,
+              chain,
+              timestamp: Date.now()
+            });
+          } else if (message.type === 'found') {
+            const balance = chain === 'btc' ? await fetchBitcoinBalance(message.result.address) : 'N/A';
+            setMatch({ ...message.result, balance });
+            setStatus('Found');
+            setSearching(false);
+            setNotice('Target private key found successfully!');
+            workersRef.current.forEach(w => w.terminate());
+            workersRef.current = [];
+          } else if (message.type === 'exhausted') {
+            finishedWorkers++;
+            if (finishedWorkers === numThreads) {
+              setStatus('Exhausted');
+              setSearching(false);
+              setNotice('Range fully scanned. No match found.');
+              workersRef.current.forEach(w => w.terminate());
+              workersRef.current = [];
+            }
+          } else if (message.type === 'error') {
+            setStatus('Error');
+            setSearching(false);
+            setNotice(message.message || 'Worker error.');
+            workersRef.current.forEach(w => w.terminate());
+            workersRef.current = [];
+          }
+        };
+
+        worker.onerror = () => {
           setStatus('Error');
           setSearching(false);
-          setNotice(message.message || 'Worker execution error.');
-          worker.terminate();
-        }
-      };
+          setNotice('Critical worker error.');
+          workersRef.current.forEach(w => w.terminate());
+          workersRef.current = [];
+        };
 
-      worker.onerror = () => {
-        setStatus('Error');
-        setSearching(false);
-        setNotice('Critical worker error.');
-        worker.terminate();
-      };
-
-      worker.postMessage({
-        startHex: (resumeKey || startHex).trim().replace(/^0x/i, ''),
-        endHex: endHex.trim().replace(/^0x/i, ''),
-        targetAddress: targetAddress.trim(),
-        chain,
-        engine,
-        cursor: resumeKey || undefined,
-      });
-    } catch {
+        worker.postMessage({
+          type: 'scan',
+          startHex: chunkStart.toString(16),
+          endHex: chunkEnd.toString(16),
+          targetAddress: targetAddress.trim(),
+          chain,
+          engine,
+        });
+      }
+    } catch (err: any) {
       setStatus('Error');
       setSearching(false);
-      setNotice('Could not initialize worker.');
+      setNotice(err.message || 'Invalid range.');
     }
   }
 
@@ -272,7 +290,6 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
         {notice && <p style={{ marginTop: '10px', fontSize: '12px', color: '#ffbd72' }}>{notice}</p>}
       </section>
 
-      {/* Minimalist Live Stream Telemetry */}
       <section style={{ marginTop: '20px', padding: '16px', background: 'hsl(var(--background))', border: '1px solid hsl(var(--border))', borderRadius: '8px', fontFamily: 'monospace' }}>
         <div style={{ fontSize: '11px', color: 'hsl(var(--muted-foreground))', marginBottom: '6px' }}>LIVE TELEMETRY: {status.toUpperCase()}</div>
         {searching ? (
@@ -291,7 +308,6 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
         )}
       </section>
 
-      {/* Match Found Card */}
       {match && (
         <div style={{ marginTop: '20px', padding: '16px', background: 'hsl(var(--background))', border: '2px solid #e77732', borderRadius: '10px' }}>
           <div style={{ color: '#ffbd72', fontWeight: 700, marginBottom: '8px' }}><Sparkles size={14} style={{ display: 'inline', marginRight: 4 }} /> MATCH FOUND!</div>
@@ -304,11 +320,6 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
           <div style={{ fontSize: '12px', marginBottom: '6px' }}>
             <span style={{ color: 'hsl(var(--muted-foreground))' }}>Balance:</span>
             <span style={{ color: '#4ade80', fontWeight: 700, marginLeft: '6px' }}>{match.balance} {chain.toUpperCase()}</span>
-          </div>
-
-          <div style={{ fontSize: '12px', marginBottom: '6px' }}>
-            <span style={{ color: 'hsl(var(--muted-foreground))' }}>Range Discovered:</span>
-            <span style={{ color: '#ffbd72', marginLeft: '6px' }}>{match.rangeStartHex} → {match.rangeEndHex}</span>
           </div>
 
           <div style={{ fontSize: '12px', marginTop: '8px' }}>
@@ -326,7 +337,6 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
             </div>
           </div>
 
-          {/* عرض الـ Private Key WIF */}
           {match.privateKeyWif && (
             <div style={{ fontSize: '12px', marginTop: '8px' }}>
               <span style={{ color: 'hsl(var(--muted-foreground))' }}>Private Key (WIF):</span>
@@ -348,4 +358,4 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
       </footer>
     </main>
   );
-            }
+    }
