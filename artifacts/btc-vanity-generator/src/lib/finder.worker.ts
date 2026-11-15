@@ -5,7 +5,7 @@ import {
   deriveBitcoinAddressOnly,
   privateKeyFromRangeValue 
 } from './bitcoin';
-import { privateKeyToEvmAddressWasm } from './evm-address-wasm';
+import { privateKeyToEvmAddressSync } from './evm-address-wasm';
 
 self.onmessage = async (event) => {
   const { startHex, endHex, targetAddress, chain = 'btc', format = 'legacy' } = event.data;
@@ -28,18 +28,13 @@ self.onmessage = async (event) => {
       key = privateKeyFromRangeValue(i);
       
       if (isBtc) {
-        // BTC: دالة متزامنة وسريعة (بلا await)
         address = deriveBitcoinAddressOnly(key, format);
       } else {
-        // EVM: كتستعمل await ولكن خاصها تكون سريعة
-        address = await privateKeyToEvmAddressWasm(key);
+        // دالة sync سريعة جداً (بلا await)
+        address = privateKeyToEvmAddressSync(key);
       }
     } catch (e: any) {
       attempts++;
-      // باش نعرفو واش كاين مشكل فـ الدوال ديال bitcoin
-      if (attempts === 1) {
-        console.error("Error on derivation:", e);
-      }
       continue; 
     }
 
@@ -73,21 +68,20 @@ self.onmessage = async (event) => {
 
     attempts++;
     
-    // تحديث الشاشة كل 1000 محاولة باش تبان الحركة دغيا
-    if (attempts % 1000 === 0) {
+    // تحديث الشاشة كل 5000 محاولة (باش نعطيو فرصة للـ Event Loop)
+    if (attempts % 5000 === 0) {
       const elapsedSeconds = Math.max((Date.now() - startedAt) / 1000, 0.001);
       self.postMessage({
         type: 'progress',
         index: i.toString(),
-        address: address, // باش نتأكدو واش العناوين كتتولد
+        address: address,
         keysPerSecond: Math.floor(attempts / elapsedSeconds),
       });
       
-      // إعطاء فرصة للـ Event Loop باش ما يتبلوكاش
+      // إعطاء فرصة للـ Event Loop
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
   }
   
-  // ملي كيسالي بلا ما يلقى
   self.postMessage({ type: 'exhausted' });
 };
