@@ -34,7 +34,7 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
   const [searching, setSearching] = useState(false);
   const [showPrivateKey, setShowPrivateKey] = useState(false);
 
-  const workersRef = useRef<Worker[]>([]); // 🚀 Multi-Workers
+  const workersRef = useRef<Worker[]>([]);
 
   useEffect(() => {
     if (active) document.title = 'Isolated Hardware Range Scanner | LUCKY BTC';
@@ -95,7 +95,6 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
 
       if (totalKeys <= 0n) throw new Error("End must be >= Start");
 
-      // 🚀 توزيع الشغل على 8 Threads
       const numThreads = Math.min(8, Math.max(4, navigator.hardwareConcurrency || 4));
       const chunkSize = totalKeys / BigInt(numThreads);
       
@@ -130,8 +129,10 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
               timestamp: Date.now()
             });
           } else if (message.type === 'found') {
+            // 🛠️ هنا كنجيبو الرصيد باش يبان فـ الشاشة
             const balance = chain === 'btc' ? await fetchBitcoinBalance(message.result.address) : 'N/A';
             setMatch({ ...message.result, balance });
+            
             setStatus('Found');
             setSearching(false);
             setNotice('Target private key found successfully!');
@@ -322,6 +323,11 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
             <span style={{ color: '#4ade80', fontWeight: 700, marginLeft: '6px' }}>{match.balance} {chain.toUpperCase()}</span>
           </div>
 
+          <div style={{ fontSize: '12px', marginBottom: '6px' }}>
+            <span style={{ color: 'hsl(var(--muted-foreground))' }}>Range Discovered:</span>
+            <span style={{ color: '#ffbd72', marginLeft: '6px' }}>{match.rangeStartHex} → {match.rangeEndHex}</span>
+          </div>
+
           <div style={{ fontSize: '12px', marginTop: '8px' }}>
             <span style={{ color: 'hsl(var(--muted-foreground))' }}>Private Key (Hex):</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '2px' }}>
@@ -358,4 +364,4 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
       </footer>
     </main>
   );
-    }
+  }
