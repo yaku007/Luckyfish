@@ -4,7 +4,8 @@ import { keccak_256 } from '@noble/hashes/sha3.js';
 /**
  * توليد عنوان EVM من مفتاح خاص.
  * كنستعملو @noble/curves اللي ديجا مثبتة فـ المشروع
- * باش نتجنبو مشاكل Vercel و WASM imports.
+ * باش نتجنبو مشاكل Vercel و WASM imports فـ الـ build.
+ * الملف سمو بقا "wasm" باش ما نضطروش نبدلو الملفات اللي كيستدعيوه.
  */
 
 export async function privateKeyToEvmAddressWasm(
@@ -12,7 +13,8 @@ export async function privateKeyToEvmAddressWasm(
 ): Promise<string> {
   // كنخدمو async باش ما نضطروش نبدلو finder.worker.ts
   const pubKey = secp256k1.getPublicKey(privateKey, false); // Uncompressed
-  const hash = keccak_256(pubKey.subarray(1)); // نحيّدو 0x04
+  const hash = keccak_256(pubKey.subarray(1)); // نحيّدو 0x04 prefix
+  
   let hex = '';
   for (let i = 12; i < 32; i++) {
     hex += hash[i].toString(16).padStart(2, '0');
@@ -28,4 +30,4 @@ export async function privateKeysToEvmAddressesWasm(
     results.push(await privateKeyToEvmAddressWasm(key));
   }
   return results;
-}
+  }
