@@ -6,62 +6,21 @@ import {
   privateKeyFromRangeValue 
 } from './bitcoin';
 import { privateKeyToEvmAddressWasm } from './evm-address-wasm';
-import type { MultiChainName } from '@/lib/multichain';
-
-// ============================================================================
-// الثوابت
-// ============================================================================
-
-const PROGRESS_INTERVAL = 5000;
-const YIELD_INTERVAL = 5000;
-
-// ============================================================================
-// الحالة
-// ============================================================================
-
-let stopped = false;
-
-// ============================================================================
-// المعالج
-// ============================================================================
 
 self.onmessage = async (event) => {
-  const msg = event.data;
-
-  if (msg.type === 'stop') {
-    stopped = true;
-    return;
-  }
-
-  if (msg.type !== 'scan') return;
-  stopped = false;
-
-  const { 
-    startHex, 
-    endHex, 
-    targetAddress, 
-    chain = 'btc', 
-    format = 'legacy' 
-  } = msg;
-
+  const { startHex, endHex, targetAddress, chain = 'btc', format = 'legacy' } = event.data;
+  
   const normalizedTarget = (targetAddress ?? '').trim();
-  const isBtc = chain === 'btc';
   const targetLower = normalizedTarget.toLowerCase();
-
+  const isBtc = chain === 'btc';
+  
   let current = BigInt(`0x${startHex}`);
   const end = BigInt(`0x${endHex}`);
-  const startedAt = (globalThis.performance?.now ?? Date.now)();
   
+  const startedAt = Date.now();
   let attempts = 0;
-  let lastTime = startedAt;
-  let lastAttempts = 0;
 
   for (let i = current; i <= end; i++) {
-    if (stopped) {
-      self.postMessage({ type: 'exhausted' });
-      return;
-    }
-
     let key: Uint8Array;
     let address = '';
 
@@ -69,14 +28,19 @@ self.onmessage = async (event) => {
       key = privateKeyFromRangeValue(i);
       
       if (isBtc) {
+        // BTC: دالة متزامنة وسريعة (بلا await)
         address = deriveBitcoinAddressOnly(key, format);
       } else {
-        // هنا كنستعملو الدالة من evm-address-wasm.ts
+        // EVM: كتستعمل await ولكن خاصها تكون سريعة
         address = await privateKeyToEvmAddressWasm(key);
       }
-    } catch (e) {
+    } catch (e: any) {
       attempts++;
-      continue;
+      // باش نعرفو واش كاين مشكل فـ الدوال ديال bitcoin
+      if (attempts === 1) {
+        console.error("Error on derivation:", e);
+      }
+      continue; 
     }
 
     const isMatch = isBtc
@@ -92,7 +56,7 @@ self.onmessage = async (event) => {
           const result = deriveBitcoinAddress(key, format);
           privateKeyWif = result.privateKeyWif;
           privateKeyHex = result.privateKeyHex;
-        } catch {}
+        } catch (e) {}
       }
 
       self.postMessage({ 
@@ -108,29 +72,22 @@ self.onmessage = async (event) => {
     }
 
     attempts++;
-
-    if (attempts % PROGRESS_INTERVAL === 0) {
-      const now = (globalThis.performance?.now ?? Date.now)();
-      const intervalSeconds = Math.max((now - lastTime) / 1000, 0.001);
-      const intervalAttempts = attempts - lastAttempts;
-
+    
+    // تحديث الشاشة كل 1000 محاولة باش تبان الحركة دغيا
+    if (attempts % 1000 === 0) {
+      const elapsedSeconds = Math.max((Date.now() - startedAt) / 1000, 0.001);
       self.postMessage({
         type: 'progress',
         index: i.toString(),
-        address,
-        keysPerSecond: Math.floor(intervalAttempts / intervalSeconds),
+        address: address, // باش نتأكدو واش العناوين كتتولد
+        keysPerSecond: Math.floor(attempts / elapsedSeconds),
       });
-
-      lastTime = now;
-      lastAttempts = attempts;
-
-      await new Promise<void>((r) => globalThis.setTimeout(r, 0));
-    }
-
-    if (attempts % YIELD_INTERVAL === 0) {
-      await new Promise<void>((r) => globalThis.setTimeout(r, 0));
+      
+      // إعطاء فرصة للـ Event Loop باش ما يتبلوكاش
+      await new Promise((resolve) => setTimeout(resolve, 0));
     }
   }
-
+  
+  // ملي كيسالي بلا ما يلقى
   self.postMessage({ type: 'exhausted' });
 };
