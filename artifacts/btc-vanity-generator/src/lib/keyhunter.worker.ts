@@ -100,21 +100,32 @@ self.onmessage = async (event) => {
           const matchedAddress = data.matched[0];
           const matchData = addressBatch.find(b => b.address.toLowerCase() === matchedAddress.toLowerCase());
           if (matchData) {
-            self.postMessage({ type: 'found', result: {
-              address: matchData.address, privateKeyHex: matchData.privateKeyHex,
-              privateKeyWif: matchData.privateKeyWif, matchedKeyHex: matchData.index.toString(16)
-            }});
+            self.postMessage({ 
+              type: 'found', 
+              result: {
+                address: matchData.address, 
+                privateKeyHex: matchData.privateKeyHex,
+                privateKeyWif: matchData.privateKeyWif, 
+                matchedKeyHex: matchData.index.toString(16)
+              }
+            });
             return;
           }
         }
-      } catch (err) {}
+      } catch (err) {
+        console.error("API Error:", err);
+      }
       addressBatch = [];
     }
 
     attempts++;
     if (attempts % 5000 === 0) {
       const elapsedMs = Math.max(1, Date.now() - startedAt);
-      self.postMessage({ type: "progress", speed: Math.floor((attempts / elapsedMs) * 1000), currentKeyHex: i.toString(16) });
+      self.postMessage({ 
+        type: "progress", 
+        speed: Math.floor((attempts / elapsedMs) * 1000), 
+        currentKeyHex: i.toString(16) 
+      });
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
   }
