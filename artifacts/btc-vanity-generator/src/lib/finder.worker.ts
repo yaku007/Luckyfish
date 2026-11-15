@@ -7,20 +7,53 @@ import {
 } from './bitcoin';
 import { privateKeyToEvmAddressSync } from './evm-address-wasm';
 
+// متغير باش نعرفو واش المستعمل دار Stop
+let stopped = false;
+
 self.onmessage = async (event) => {
-  const { startHex, endHex, targetAddress, chain = 'btc', format = 'legacy' } = event.data;
+  const msg = event.data;
+
+  // 🛑 التحقق من رسالة التوقف
+  if (msg.type === 'stop') {
+    stopped = true;
+    return;
+  }
+
+  if (msg.type !== 'scan') return;
+  stopped = false; // تصفير الحالة عند بداية بحث جديد
+
+  const { startHex, endHex, targetAddress, chain = 'btc', format = 'legacy' } = msg;
   
   const normalizedTarget = (targetAddress ?? '').trim();
   const targetLower = normalizedTarget.toLowerCase();
   const isBtc = chain === 'btc';
   
-  let current = BigInt(`0x${startHex}`);
-  const end = BigInt(`0x${endHex}`);
+  // 🛡️ حماية من الأخطاء فـ تحويل النطاق
+  let current: bigint;
+  let end: bigint;
+  try {
+    current = BigInt(`0x${startHex}`);
+    end = BigInt(`0x${endHex}`);
+  } catch {
+    self.postMessage({ type: 'error', message: 'Invalid hex range.' });
+    return;
+  }
+
+  if (end < current) {
+    self.postMessage({ type: 'error', message: 'End key must be >= Start key.' });
+    return;
+  }
   
   const startedAt = Date.now();
   let attempts = 0;
 
   for (let i = current; i <= end; i++) {
+    // 🛑 التحقق من التوقف فـ كل دورة
+    if (stopped) {
+      self.postMessage({ type: 'exhausted' });
+      return;
+    }
+
     let key: Uint8Array;
     let address = '';
 
@@ -68,17 +101,18 @@ self.onmessage = async (event) => {
 
     attempts++;
     
-    // تحديث الشاشة كل 5000 محاولة (باش نعطيو فرصة للـ Event Loop)
+    // تحديث الشاشة كل 5000 محاولة
     if (attempts % 5000 === 0) {
       const elapsedSeconds = Math.max((Date.now() - startedAt) / 1000, 0.001);
+      
+      // ✅ زدنا 0x باش يبان الرقم بشكل احترافي
       self.postMessage({
         type: 'progress',
-        index: i.toString(),
+        index: `0x${i.toString(16)}`,
         address: address,
         keysPerSecond: Math.floor(attempts / elapsedSeconds),
       });
       
-      // إعطاء فرصة للـ Event Loop
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
   }
