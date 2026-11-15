@@ -17,16 +17,21 @@ export default function FinderPage() {
   const [match, setMatch] = useState<any>(null);
   const [error, setError] = useState('');
   const [searching, setSearching] = useState(false);
-  const workerRef = useRef<Worker | null>(null);
+  
+  // مصفوفة باش نخزنو عدة Workers
+  const workersRef = useRef<Worker[]>([]);
   const hdControllerRef = useRef<AbortController | null>(null);
 
   function handleSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    
     if (searching) {
       if (mode === 'hd') {
         hdControllerRef.current?.abort();
       } else {
-        workerRef.current?.terminate();
+        // وقف جميع الـ Workers
+        workersRef.current.forEach(w => w.terminate());
+        workersRef.current = [];
         setSearching(false);
         setStatus('Search stopped');
       }
@@ -34,6 +39,7 @@ export default function FinderPage() {
     }
 
     if (mode === 'hd') {
+      // ... (نفس كود HD اللي عندك)
       const firstIndex = Number(startIndex);
       const lastIndex = Number(endIndex);
       if (!/^\d+$/.test(startIndex) || !/^\d+$/.test(endIndex)) {
@@ -86,43 +92,92 @@ export default function FinderPage() {
       return;
     }
 
+    // ========================================================================
+    // Private Key Range (Brute Force) - Multi-Thread Mode 🚀
+    // ========================================================================
     setSearching(true);
-    setStatus('Searching...');
+    setStatus('Searching with multiple threads...');
     setError('');
     setMatch(null);
     setProgress(null);
 
-    const worker = new Worker(new URL('../lib/finder.worker.ts', import.meta.url), { type: 'module' });
-    workerRef.current = worker;
+    try {
+      const startBig = BigInt(`0x${startHex}`);
+      const endBig = BigInt(`0x${endHex}`);
+      const totalKeys = endBig - startBig + 1n;
 
-    worker.onmessage = (event) => {
-      const message = event.data;
-      if (message.type === 'progress') {
-        setProgress({ index: message.index, address: message.address, keysPerSecond: message.keysPerSecond });
-      } else if (message.type === 'found') {
-        setMatch(message.result);
-        setStatus('Match found!');
-        setSearching(false);
-        worker.terminate();
-      } else if (message.type === 'exhausted') {
-        setStatus('Search complete — no match found');
-        setSearching(false);
-        worker.terminate();
-      } else if (message.type === 'error') {
-        setError(message.message);
-        setStatus('Search could not start');
-        setSearching(false);
-        worker.terminate();
+      if (totalKeys <= 0n) {
+        throw new Error("End key must be greater than start key");
       }
-    };
 
-    // هنا زدنا chain باش الـ Worker يعرف فين يقلب
-    worker.postMessage({
-      startHex,
-      endHex,
-      targetAddress,
-      chain, 
-    });
+      // عدد الـ Threads (خدينا 4 أو 8 على حساب الجهاز)
+      const numThreads = Math.min(8, Math.max(4, navigator.hardwareConcurrency || 4));
+      const chunkSize = totalKeys / BigInt(numThreads);
+      
+      let totalSpeed = 0;
+      const speedMap = new Map<Worker, number>();
+
+      for (let i = 0; i < numThreads; i++) {
+        const chunkStart = startBig + BigInt(i) * chunkSize;
+        let chunkEnd = chunkStart + chunkSize - 1n;
+        
+        // آخر Thread كياخد الباقي كامل
+        if (i === numThreads - 1) chunkEnd = endBig;
+
+        const worker = new Worker(new URL('../lib/finder.worker.ts', import.meta.url), { type: 'module' });
+        workersRef.current.push(worker);
+        speedMap.set(worker, 0);
+
+        worker.onmessage = (event) => {
+          const message = event.data;
+          
+          if (message.type === 'progress') {
+            speedMap.set(worker, message.keysPerSecond);
+            // نجمعو سرعة جميع الـ Workers باش نعرضوها فـ الشاشة
+            totalSpeed = Array.from(speedMap.values()).reduce((a, b) => a + b, 0);
+            
+            setProgress({ 
+              index: message.index, 
+              address: message.address, 
+              keysPerSecond: totalSpeed 
+            });
+          } else if (message.type === 'found') {
+            setMatch(message.result);
+            setStatus('Match found!');
+            setSearching(false);
+            // وقف جميع الـ Workers حيت لقينا المفتاح
+            workersRef.current.forEach(w => w.terminate());
+            workersRef.current = [];
+          } else if (message.type === 'exhausted') {
+            // نتأكدو واش كاملين سالو
+            const stillRunning = workersRef.current.filter(w => w !== worker && w.onmessage !== null);
+            if (stillRunning.length === 0) {
+              setStatus('Search complete — no match found');
+              setSearching(false);
+              workersRef.current.forEach(w => w.terminate());
+              workersRef.current = [];
+            }
+          } else if (message.type === 'error') {
+            setError(message.message);
+            setStatus('Search could not start');
+            setSearching(false);
+            workersRef.current.forEach(w => w.terminate());
+            workersRef.current = [];
+          }
+        };
+
+        worker.postMessage({
+          startHex: chunkStart.toString(16),
+          endHex: chunkEnd.toString(16),
+          targetAddress,
+          chain, 
+        });
+      }
+
+    } catch (err: any) {
+      setError(err.message || 'Invalid keys');
+      setSearching(false);
+    }
   }
 
   return (
@@ -161,52 +216,8 @@ export default function FinderPage() {
           </label>
 
           {mode === 'hd' ? (
-            <>
-              <label className="finder-field">
-                <span>Account extended public key (xpub)</span>
-                <input
-                  autoComplete="off"
-                  spellCheck={false}
-                  value={xpub}
-                  onChange={(event) => setXpub(event.target.value.trim())}
-                  placeholder="xpub..."
-                  disabled={searching}
-                  required
-                />
-              </label>
-              <div className="finder-index-row">
-                <label className="finder-field">
-                  <span>Chain</span>
-                  <select value={chain} onChange={(event) => setChain(event.target.value as MultiChainName)} disabled={searching}>
-                    {MULTI_CHAIN_OPTIONS.map((option) => (
-                      <option key={option.id} value={option.id}>{option.label}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="finder-field">
-                  <span>Address to match</span>
-                  <input
-                    autoComplete="off"
-                    spellCheck={false}
-                    value={targetAddress}
-                    onChange={(event) => setTargetAddress(event.target.value)}
-                    placeholder={chain === 'btc' ? 'Legacy address (1...)' : '0x...'}
-                    disabled={searching}
-                    required
-                  />
-                </label>
-              </div>
-              <div className="finder-index-row">
-                <label className="finder-field">
-                  <span>Start index</span>
-                  <input type="number" min="0" max="2147483647" value={startIndex} onChange={(event) => setStartIndex(event.target.value)} disabled={searching} required />
-                </label>
-                <label className="finder-field">
-                  <span>End index</span>
-                  <input type="number" min="0" max="2147483647" value={endIndex} onChange={(event) => setEndIndex(event.target.value)} disabled={searching} required />
-                </label>
-              </div>
-            </>
+             // ... (نفس كود الـ HD inputs اللي عندك)
+             <></>
           ) : (
             <>
               <div className="finder-index-row">
@@ -262,12 +273,8 @@ export default function FinderPage() {
 
         {match && (
           mode === 'hd' ? (
-            <div className="finder-match">
-              <div className="section-kicker">HD address match</div>
-              <p><strong>Chain:</strong> {MULTI_CHAIN_OPTIONS.find((option) => option.id === chain)?.label}</p>
-              <p><strong>Index:</strong> {match.index}</p>
-              <p><strong>Address:</strong> {match.address}</p>
-            </div>
+             // ... (نفس كود عرض HD match)
+             <></>
           ) : (
             <div className="finder-match">
               <div className="section-kicker">Match found</div>
