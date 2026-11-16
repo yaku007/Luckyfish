@@ -7,6 +7,7 @@ export default function BitcoinPuzzlePage() {
   const [startHex, setStartHex] = useState('1');
   const [endHex, setEndHex] = useState('100000');
   const [chain, setChain] = useState<MultiChainName>('btc');
+  const [numThreads, setNumThreads] = useState<number>(4); // 🛠️ عدد الـ Threads
   
   const [status, setStatus] = useState('Ready');
   const [keysPerSec, setKeysPerSec] = useState(0);
@@ -37,7 +38,7 @@ export default function BitcoinPuzzlePage() {
     setMatch(null);
     setKeysPerSec(0);
     setCurrentKey(startHex);
-    setNotice('Scanning database for target addresses...');
+    setNotice('Fetching addresses from DB...');
 
     try {
       const startBig = BigInt(`0x${startHex.trim().replace(/^0x/i, '')}`);
@@ -46,7 +47,6 @@ export default function BitcoinPuzzlePage() {
 
       if (totalKeys <= 0n) throw new Error("End must be >= Start");
 
-      const numThreads = Math.min(8, Math.max(4, navigator.hardwareConcurrency || 4));
       const chunkSize = totalKeys / BigInt(numThreads);
       
       let totalSpeed = 0;
@@ -70,8 +70,8 @@ export default function BitcoinPuzzlePage() {
             totalSpeed = Array.from(speedMap.values()).reduce((a, b) => a + b, 0);
             setKeysPerSec(totalSpeed);
             setCurrentKey(message.currentKeyHex);
+            setNotice('Scanning Database...');
           } else if (message.type === 'found') {
-            // 🛠️ هنا كيبان الـ Match فـ الشاشة
             setMatch(message.result);
             setStatus('Found');
             setSearching(false);
@@ -87,6 +87,12 @@ export default function BitcoinPuzzlePage() {
               workersRef.current.forEach(w => w.terminate());
               workersRef.current = [];
             }
+          } else if (message.type === 'error') {
+            setStatus('Error');
+            setSearching(false);
+            setNotice(message.message || 'Worker error.');
+            workersRef.current.forEach(w => w.terminate());
+            workersRef.current = [];
           }
         };
 
@@ -159,6 +165,24 @@ export default function BitcoinPuzzlePage() {
             </div>
           </div>
 
+          {/* 🛠️ خانة اختيار عدد الـ Threads */}
+          <div style={{ marginTop: '15px' }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+              <span style={{ fontSize: '13px', color: 'hsl(var(--muted-foreground))' }}>CPU Threads (Workers)</span>
+              <input
+                type="range"
+                min="1"
+                max="8"
+                step="1"
+                value={numThreads}
+                onChange={(e) => setNumThreads(Number(e.target.value))}
+                disabled={searching}
+                style={{ width: '100%', cursor: 'pointer' }}
+              />
+              <span style={{ textAlign: 'center', fontWeight: 'bold', color: '#ffbd72' }}>{numThreads} Threads</span>
+            </label>
+          </div>
+
           <div style={{ marginTop: '15px' }}>
             <button
               type="submit"
@@ -214,4 +238,4 @@ export default function BitcoinPuzzlePage() {
       )}
     </main>
   );
-}
+                }
