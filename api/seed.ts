@@ -3,9 +3,9 @@ import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
-// قائمة العناوين اللي فيهم رصيد
+// قائمة العناوين اللي فيهم رصيد (مرتبة من الأكبر للأصغر)
 const ADDRESSES_LIST = [
-  "1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH",
+  "1P5ZEDWTKTFGxQjZphgWPQUpe554WKDfHQ",
   "1FeexV6bAHb8ybZjqQMjJrcCrHGW9sb6uF",
   "1LdRcdxfbSnmCYYNdeYpUnztiYzVfBEQeC",
   "1AC4fMwgY8j9onSbXEWeH6Zan8QGMSdmtA",
@@ -795,7 +795,7 @@ const ADDRESSES_LIST = [
   "17aEcvgXy9o8WChy2NQ25PykaQmPaSsKuh",
   "1B1mktueQwNbtmxPgiKqnnUgQonPud3HLZ",
   "115cU7d8YVkwJb6ffHGeT1m3rzdt4itCid",
-  "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
+  "1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH"
 ];
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -816,8 +816,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     return res.status(200).send(`
       <h1>✅ Database Seeded Successfully!</h1>
-      <p>Total addresses in list: ${ADDRESSES_LIST.length}</p>
-      <p>Successfully added ${result.count} new addresses to the database.</p>
+      <p>Total addresses in list: <strong>${ADDRESSES_LIST.length}</strong></p>
+      <p>Successfully added to database: <strong>${result.count}</strong></p>
+      <p><strong>Includes 1P5ZEDWTKTFGxQjZphgWPQUpe554WKDfHQ?</strong> ${ADDRESSES_LIST.includes('1P5ZEDWTKTFGxQjZphgWPQUpe554WKDfHQ') ? '✅ YES' : '❌ NO'}</p>
+      <p><strong>Includes 1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH?</strong> ${ADDRESSES_LIST.includes('1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH') ? '✅ YES' : '❌ NO'}</p>
       <p style="color: green;">You can now use the KeyHunter page to search against these addresses.</p>
     `);
   } catch (error: any) {
