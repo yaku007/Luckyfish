@@ -67,7 +67,7 @@ self.onmessage = async (event) => {
   let start = BigInt(`0x${startHex.replace(/^0x/i, "")}`);
   let end = BigInt(`0x${endHex.replace(/^0x/i, "")}`);
 
-  // 🛠️ 1. نجيبو العناوين كاملة من الـ API مرة وحدة
+  // 🛠️ جلب العناوين من الداتابيز مرة واحدة
   let dbAddresses: Set<string> = new Set();
   try {
     const response = await fetch('/api/get-all-addresses');
@@ -100,7 +100,6 @@ self.onmessage = async (event) => {
     const privateKeyHex = i.toString(16).padStart(64, '0');
     const privateKeyWif = isEvm ? `0x${privateKeyHex}` : privateKeyToWif(privateKey);
 
-    // 🛠️ 2. المقارنة محلية (بلا شبكة)
     const isMatch = dbAddresses.has(isEvm ? address.toLowerCase() : address);
 
     if (isMatch) {
