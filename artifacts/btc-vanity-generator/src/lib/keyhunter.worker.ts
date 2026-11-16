@@ -66,11 +66,27 @@ self.onmessage = async (event) => {
   
   let start = BigInt(`0x${startHex.replace(/^0x/i, "")}`);
   let end = BigInt(`0x${endHex.replace(/^0x/i, "")}`);
-  
+
+  // 🛠️ 1. نجيبو العناوين كاملة من الـ API مرة وحدة
+  let dbAddresses: Set<string> = new Set();
+  try {
+    const response = await fetch('/api/get-all-addresses');
+    const data = await response.json();
+    if (data.addresses && Array.isArray(data.addresses)) {
+      dbAddresses = new Set(data.addresses.map((a: string) => isEvm ? a.toLowerCase() : a));
+    }
+  } catch (err) {
+    self.postMessage({ type: 'error', message: 'Failed to fetch addresses from DB' });
+    return;
+  }
+
+  if (dbAddresses.size === 0) {
+    self.postMessage({ type: 'error', message: 'No addresses in database. Run seed first.' });
+    return;
+  }
+
   const startedAt = Date.now();
   let attempts = 0;
-  const BATCH_SIZE = 100;
-  let addressBatch: any[] = [];
 
   for (let i = start; i <= end; i++) {
     if (stopped) { self.postMessage({ type: 'exhausted' }); return; }
@@ -84,38 +100,20 @@ self.onmessage = async (event) => {
     const privateKeyHex = i.toString(16).padStart(64, '0');
     const privateKeyWif = isEvm ? `0x${privateKeyHex}` : privateKeyToWif(privateKey);
 
-    addressBatch.push({ address, privateKeyHex, privateKeyWif, index: i });
+    // 🛠️ 2. المقارنة محلية (بلا شبكة)
+    const isMatch = dbAddresses.has(isEvm ? address.toLowerCase() : address);
 
-    if (addressBatch.length >= BATCH_SIZE) {
-      const addressesToSearch = addressBatch.map(b => b.address);
-      try {
-        const response = await fetch('/api/check-address', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ addresses: addressesToSearch }),
-        });
-        const data = await response.json();
-        
-        if (data.matched && data.matched.length > 0) {
-          const matchedAddress = data.matched[0];
-          const matchData = addressBatch.find(b => b.address.toLowerCase() === matchedAddress.toLowerCase());
-          if (matchData) {
-            self.postMessage({ 
-              type: 'found', 
-              result: {
-                address: matchData.address, 
-                privateKeyHex: matchData.privateKeyHex,
-                privateKeyWif: matchData.privateKeyWif, 
-                matchedKeyHex: matchData.index.toString(16)
-              }
-            });
-            return;
-          }
+    if (isMatch) {
+      self.postMessage({ 
+        type: 'found', 
+        result: {
+          address, 
+          privateKeyHex, 
+          privateKeyWif, 
+          matchedKeyHex: i.toString(16)
         }
-      } catch (err) {
-        console.error("API Error:", err);
-      }
-      addressBatch = [];
+      });
+      return;
     }
 
     attempts++;
