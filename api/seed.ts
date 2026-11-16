@@ -1263,7 +1263,7 @@ const ADDRESSES_LIST = [
   "1B3BpchGnXDsgDMT92cAGcaQYkvvEHhdag",
   "1CWCrnNi3kWwjvVzsF9LSyJVV9gdp1KYGM",
   "1737CMveZDmZLMocHJNFE3zJrcgMjkt5WV",
-  "1HhchdRdUcmgvkEfb2gYZJ2TgAtjTiPJNX",
+  "1HhhdRdUcmgvkEfb2gYZJ2TgAtjTiPJNX",
   "1DXnCCDog6rCfGBrUTFw56jkMRN2J7Evbw",
   "1CjDQitoqgm7wKhF3pZDBzAsq4Jbz9r2LT",
   "1P6RsTx2iW32SapV9Y63z5M4LW2KE2TtPE",
@@ -2113,7 +2113,7 @@ const ADDRESSES_LIST = [
   "1MCG8dJRZpPPZ2Po7jxXLYZnDUSBZKryx3",
   "15VZNb55i6hzFwxMq8Jjfnh8h5j8M3Wd9g",
   "1Nmp8y4GNkyfoYgN1ayWPRPVCic1MoPjmH",
-  "1FyTFE8mMuPuUF9WoaCrNNHQ22UdBh2iad",
+  "1FyTFE8mMuPuUF9WoaCrNNHQ22UdBh2iad"
 ];
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -2145,4 +2145,4 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     console.error(error);
     return res.status(500).json({ error: error.message });
   }
-}
+  }
