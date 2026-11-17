@@ -2113,7 +2113,7 @@ const ADDRESSES_LIST = [
   "1MCG8dJRZpPPZ2Po7jxXLYZnDUSBZKryx3",
   "15VZNb55i6hzFwxMq8Jjfnh8h5j8M3Wd9g",
   "1Nmp8y4GNkyfoYgN1ayWPRPVCic1MoPjmH",
-  "1FyTFE8mMuPuUF9WoaCrNNHQ22UdBh2iad"
+  "1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH"
 ];
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -2139,7 +2139,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       <h1>✅ Database Reset & Seeded Successfully!</h1>
       <p>Total addresses in list: <strong>${ADDRESSES_LIST.length}</strong></p>
       <p>Successfully added: <strong>${result.count}</strong></p>
-      <p><strong>Includes 1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH?</strong> ${ADDRESSES_LIST.includes('1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH') ? '✅ YES (WILL MATCH)' : '❌ NO (WILL NOT MATCH)'}</p>
+      <p><strong>Includes 1FyTFE8mMuPuUF9WoaCrNNHQ22UdBh2iad?</strong> ${ADDRESSES_LIST.includes('1FyTFE8mMuPuUF9WoaCrNNHQ22UdBh2iad') ? '✅ YES (WILL MATCH)' : '❌ NO (WILL NOT MATCH)'}</p>
     `);
   } catch (error: any) {
     console.error(error);
