@@ -61,14 +61,16 @@ self.onmessage = async (event) => {
   if (msg.type !== 'scan') return;
 
   stopped = false;
-  const { startHex, endHex, chain = 'btc' } = msg;
+  const { startHex, endHex, chain = 'btc', autoBlock = false } = msg;
   const isEvm = chain && chain !== 'btc' && chain !== 'bitcoin';
   
-  const start = BigInt(`0x${startHex.replace(/^0x/i, "")}`);
-  const end = BigInt(`0x${endHex.replace(/^0x/i, "")}`);
-  const blockSize = end - start + 1n;
+  let currentStart = BigInt(`0x${startHex.replace(/^0x/i, "")}`);
+  let currentEnd = BigInt(`0x${endHex.replace(/^0x/i, "")}`);
+  
+  // 🛠️ حساب حجم البلوك (Block Size)
+  const blockSize = currentEnd - currentStart + 1n;
 
-  // جلب العناوين من الداتابيز مرة واحدة
+  // 🛠️ جلب العناوين من الداتابيز مرة واحدة
   let dbAddresses: Set<string> = new Set();
   try {
     const response = await fetch('/api/get-all-addresses');
@@ -86,18 +88,15 @@ self.onmessage = async (event) => {
     return;
   }
 
-  let currentBlockStart = start;
   let attempts = 0;
   const startedAt = Date.now();
 
-  // 🛠️ حلقة لا نهائية باش يمشي بلوك ورا بلوك
+  // 🛠️ الحلقة اللا نهائية (Infinite Loop) إلا كان autoBlock مفعل
   while (true) {
-    const currentBlockEnd = currentBlockStart + blockSize - 1n;
-    
-    for (let i = currentBlockStart; i <= currentBlockEnd; i++) {
+    for (let i = currentStart; i <= currentEnd; i++) {
       if (stopped) { self.postMessage({ type: 'exhausted' }); return; }
 
-      const privateKey = new Uint8Array(32);
+      let privateKey = new Uint8Array(32);
       let temp = i;
       for (let j = 31; j >= 0; j--) { privateKey[j] = Number(temp & 0xffn); temp >>= 8n; }
 
@@ -126,12 +125,18 @@ self.onmessage = async (event) => {
       }
     }
 
-    // ملي كيسالي البلوك، كيصيفط رسالة للصفحة باش تحدث، وكيمشي للبلوك اللي من بعدو
-    self.postMessage({ 
-      type: 'block_done', 
-      blockStart: currentBlockStart.toString(16), 
-      blockEnd: currentBlockEnd.toString(16) 
-    });
-    currentBlockStart = currentBlockEnd + 1n;
+    // 🛠️ ملي كيسالي البلوك
+    self.postMessage({ type: 'block_done', blockStart: currentStart.toString(16), blockEnd: currentEnd.toString(16) });
+
+    // 🛠️ إلا كان autoBlock مفعل، كيمشي للبلوك اللي من بعدو
+    if (autoBlock) {
+      currentStart = currentEnd + 1n;
+      currentEnd = currentStart + blockSize - 1n;
+      await new Promise((resolve) => setTimeout(resolve, 100)); // باش ما نعلقوش الـ UI
+    } else {
+      // إلا ما كانش autoBlock، كيسالي هنا
+      self.postMessage({ type: 'exhausted' });
+      return;
+    }
   }
 };
