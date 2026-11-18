@@ -68,7 +68,7 @@ self.onmessage = async (event) => {
   let currentEnd = BigInt(`0x${endHex.replace(/^0x/i, "")}`);
   const blockSize = currentEnd - currentStart + 1n;
 
-  // 🛠️ جلب العناوين من الداتابيز مرة واحدة
+  // 🛠️ جلب العناوين
   let dbAddresses: Set<string> = new Set();
   try {
     const response = await fetch('/api/get-all-addresses');
@@ -88,7 +88,7 @@ self.onmessage = async (event) => {
 
   let attempts = 0;
   const startedAt = Date.now();
-  let found = false; // 🛠️ متغير باش نعرفو واش لقينا
+  let found = false;
 
   while (true) {
     for (let i = currentStart; i <= currentEnd; i++) {
@@ -100,16 +100,20 @@ self.onmessage = async (event) => {
 
       const pubKey = secp256k1.getPublicKey(privateKey, !isEvm); 
       const address = isEvm ? evmAddress(pubKey) : legacyBtcAddress(pubKey);
-      const privateKeyHex = i.toString(16).padStart(64, '0');
-      const privateKeyWif = isEvm ? `0x${privateKeyHex}` : privateKeyToWif(privateKey);
 
+      // 🛠️ حيدنا privateKeyHex و privateKeyWif من الوسط
+      
       if (dbAddresses.has(isEvm ? address.toLowerCase() : address)) {
+        // 🛠️ حسبناهم هنا فقط
+        const privateKeyHex = i.toString(16).padStart(64, '0');
+        const privateKeyWif = isEvm ? `0x${privateKeyHex}` : privateKeyToWif(privateKey);
+        
         self.postMessage({ 
           type: 'found', 
           result: { address, privateKeyHex, privateKeyWif, matchedKeyHex: i.toString(16) }
         });
         found = true;
-        break; // 🛠️ كنخرجو من الـ for loop
+        break;
       }
 
       attempts++;
@@ -124,7 +128,7 @@ self.onmessage = async (event) => {
       }
     }
 
-    if (found) return; // 🛠️ إلا لقينا، كنوقفو هنا
+    if (found) return;
 
     self.postMessage({ type: 'block_done', blockStart: currentStart.toString(16), blockEnd: currentEnd.toString(16) });
 
