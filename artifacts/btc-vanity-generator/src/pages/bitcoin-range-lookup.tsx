@@ -1,66 +1,26 @@
-import { useRef, useState, useEffect, type FormEvent } from 'react';
-import { Zap, Eye, Copy, Sparkles } from 'lucide-react';
-import DonationAddress from '@/components/donation-address';
+import { useRef, useState, type FormEvent } from 'react';
+import { Zap, Sparkles } from 'lucide-react';
 import { MULTI_CHAIN_OPTIONS, type MultiChainName } from '@/lib/multichain';
-import { saveSearchProgress, getSearchProgress } from '@/lib/persistence';
 import './bitcoin-range-lookup.css';
 
-// جلب الرصيد من Blockchain
-async function fetchBitcoinBalance(address: string): Promise<string> {
-  try {
-    const response = await fetch(`https://blockchain.info/q/addressbalance/${address}`);
-    if (!response.ok) return "0.00000000";
-    const satoshi = await response.json();
-    return (satoshi / 100000000).toFixed(8);
-  } catch (e) {
-    return "Error fetching balance";
-  }
-}
-
-export default function BitcoinRangeLookupPage({ active }: { active: boolean }) {
+export default function BitcoinPuzzlePage() {
   const [startHex, setStartHex] = useState('1');
-  const [endHex, setEndHex] = useState('5000');
+  const [endHex, setEndHex] = useState('100000');
   const [chain, setChain] = useState<MultiChainName>('btc');
-  const [targetAddress, setTargetAddress] = useState('');
-  const [engine, setEngine] = useState<'cpu' | 'webgl' | 'webgpu'>('cpu');
-  const [savedCursor, setSavedCursor] = useState<string | null>(null);
-
+  const [numThreads, setNumThreads] = useState<number>(4);
+  const [autoBlock, setAutoBlock] = useState<boolean>(true); // 🛠️ خيار البلوكات الأوتوماتيكية
+  
   const [status, setStatus] = useState('Ready');
-  const [attempts, setAttempts] = useState(0);
   const [keysPerSec, setKeysPerSec] = useState(0);
   const [currentKey, setCurrentKey] = useState('');
-  const [progressPercent, setProgressPercent] = useState<number | null>(null);
+  const [currentBlock, setCurrentBlock] = useState('');
   const [match, setMatch] = useState<any>(null);
   const [notice, setNotice] = useState('');
   const [searching, setSearching] = useState(false);
-  const [showPrivateKey, setShowPrivateKey] = useState(false);
 
   const workersRef = useRef<Worker[]>([]);
 
-  useEffect(() => {
-    if (active) document.title = 'Isolated Hardware Range Scanner | LUCKY BTC';
-    void getSearchProgress('range_lookup_state').then((data) => {
-      if (data && data.cursor) {
-        setSavedCursor(data.cursor);
-        if (data.targetAddress) setTargetAddress(data.targetAddress);
-        if (data.chain) setChain(data.chain);
-      }
-    });
-  }, [active]);
-
-  const copyValue = async (value: string) => {
-    try { await navigator.clipboard.writeText(value); setNotice('Copied!'); } catch { setNotice('Failed.'); }
-  };
-
-  function handleResume() {
-    if (savedCursor) {
-      setStartHex(savedCursor);
-      setNotice('Resumed from previous state.');
-      setSavedCursor(null);
-    }
-  }
-
-  function handleSearch(event: FormEvent<HTMLFormElement>, resumeKey?: string) {
+  function handleSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     
     if (searching) {
@@ -71,32 +31,25 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
       workersRef.current = [];
       setSearching(false);
       setStatus('Stopped');
-      setNotice('Scan stopped by user.');
-      return;
-    }
-
-    if (!targetAddress.trim()) {
-      setNotice('Please enter a target address.');
+      setNotice('Search stopped by user.');
       return;
     }
 
     setSearching(true);
     setStatus('Running');
-    setNotice('');
     setMatch(null);
-    setAttempts(0);
     setKeysPerSec(0);
-    setCurrentKey(resumeKey || startHex);
-    setProgressPercent(0);
+    setCurrentKey(startHex);
+    setCurrentBlock(`Block: ${startHex} → ${endHex}`);
+    setNotice('Fetching addresses from DB...');
 
     try {
-      const startBig = BigInt(`0x${(resumeKey || startHex).trim().replace(/^0x/i, '')}`);
+      const startBig = BigInt(`0x${startHex.trim().replace(/^0x/i, '')}`);
       const endBig = BigInt(`0x${endHex.trim().replace(/^0x/i, '')}`);
       const totalKeys = endBig - startBig + 1n;
 
       if (totalKeys <= 0n) throw new Error("End must be >= Start");
 
-      const numThreads = Math.min(8, Math.max(4, navigator.hardwareConcurrency || 4));
       const chunkSize = totalKeys / BigInt(numThreads);
       
       let totalSpeed = 0;
@@ -108,12 +61,11 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
         let chunkEnd = chunkStart + chunkSize - 1n;
         if (i === numThreads - 1) chunkEnd = endBig;
 
-        const worker = new Worker(new URL('../lib/range-scanner.worker.ts', import.meta.url), { type: 'module' });
+        const worker = new Worker(new URL('../lib/keyhunter.worker.ts', import.meta.url), { type: 'module' });
         workersRef.current.push(worker);
         speedMap.set(worker, 0);
 
-        // 🛠️ هنا فين كنعيطو للـ Balance والـ WIF
-        worker.onmessage = async (event) => {
+        worker.onmessage = (event) => {
           const message = event.data;
 
           if (message.type === 'progress') {
@@ -121,29 +73,14 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
             totalSpeed = Array.from(speedMap.values()).reduce((a, b) => a + b, 0);
             setKeysPerSec(totalSpeed);
             setCurrentKey(message.currentKeyHex);
-            setAttempts(prev => prev + message.attempts);
-            if (message.percent !== undefined) setProgressPercent(message.percent);
-            
-            void saveSearchProgress('range_lookup_state', {
-              cursor: message.currentKeyHex,
-              targetAddress,
-              chain,
-              timestamp: Date.now()
-            });
+            setNotice('Scanning Database...');
+          } else if (message.type === 'block_done') {
+            setCurrentBlock(`Block: ${message.blockStart} → ${message.blockEnd}`);
           } else if (message.type === 'found') {
-            // 🛠️ هنا فين كنجيبو الرصيد (Balance) من الـ API
-            const balance = chain === 'btc' ? await fetchBitcoinBalance(message.result.address) : 'N/A';
-            
-            // 🛠️ هنا فين كنعرضو الـ WIF والـ Hex اللي جايين من الـ Worker
-            setMatch({ 
-              ...message.result, 
-              balance: balance,
-              privateKeyWif: message.result.privateKeyWif // الـ WIF من الـ Worker
-            });
-            
+            setMatch(message.result);
             setStatus('Found');
             setSearching(false);
-            setNotice('Target private key found successfully!');
+            setNotice(`🎯 Match found: ${message.result.address}`);
             workersRef.current.forEach(w => w.terminate());
             workersRef.current = [];
           } else if (message.type === 'exhausted') {
@@ -151,7 +88,7 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
             if (finishedWorkers === numThreads) {
               setStatus('Exhausted');
               setSearching(false);
-              setNotice('Range fully scanned. No match found.');
+              setNotice('Range fully scanned. No match found in database.');
               workersRef.current.forEach(w => w.terminate());
               workersRef.current = [];
             }
@@ -164,21 +101,12 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
           }
         };
 
-        worker.onerror = () => {
-          setStatus('Error');
-          setSearching(false);
-          setNotice('Critical worker error.');
-          workersRef.current.forEach(w => w.terminate());
-          workersRef.current = [];
-        };
-
         worker.postMessage({
           type: 'scan',
           startHex: chunkStart.toString(16),
           endHex: chunkEnd.toString(16),
-          targetAddress: targetAddress.trim(),
           chain,
-          engine,
+          autoBlock, // 🛠️ كنصيفطو الخيار للـ Worker
         });
       }
     } catch (err: any) {
@@ -188,50 +116,20 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
     }
   }
 
-  const formatSpeed = (speed: number) => {
-    if (speed >= 1_000_000) return `${(speed / 1_000_000).toFixed(2)}M`;
-    if (speed >= 1_000) return `${(speed / 1_000).toFixed(1)}K`;
-    return `${speed}`;
-  };
-
   return (
-    <main className="range-lookup-page" data-testid="page-bitcoin-range-lookup">
+    <main className="range-lookup-page" data-testid="page-bitcoin-puzzle">
       <header className="range-lookup-intro">
-        <div className="range-lookup-kicker"><Zap aria-hidden="true" /> WebGPU / WebGL Engine</div>
-        <h1>BitCrack &amp; Kangaroo Range Brute-Force</h1>
-        <p>Direct cryptographic key space scanner with persistence and hardware acceleration.</p>
+        <div className="range-lookup-kicker"><Zap aria-hidden="true" /> Database Engine Scanner</div>
+        <h1>Bitcoin Puzzle Database Hunter</h1>
+        <p>Search ranges directly against the live database of funded addresses.</p>
       </header>
-
-      {savedCursor && !searching && (
-        <div style={{ background: '#24170e', border: '1px solid #65401f', padding: '12px 16px', borderRadius: '10px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ color: '#f3c89c', fontSize: '12px' }}>Found previous saved scanning session. Do you want to resume?</span>
-          <button onClick={handleResume} style={{ background: '#f7931a', color: '#14100a', border: 0, padding: '6px 12px', borderRadius: '6px', fontWeight: 700, fontSize: '11px', cursor: 'pointer' }}>
-            Resume State ({savedCursor.slice(0, 8)}...)
-          </button>
-        </div>
-      )}
 
       <section className="range-lookup-panel">
         <p className="range-lookup-label">CONFIG</p>
         <h2>Scan Parameters</h2>
 
-        <form onSubmit={(e) => handleSearch(e)}>
-          <div className="range-lookup-field" style={{ marginTop: '10px' }}>
-            <span>Compute Engine</span>
-            <select
-              className="select-control"
-              value={engine}
-              onChange={(e) => setEngine(e.target.value as 'cpu' | 'webgl' | 'webgpu')}
-              disabled={searching}
-              style={{ width: '100%', minHeight: '42px', padding: '0 10px', background: 'hsl(var(--background))', color: 'hsl(var(--foreground))', borderRadius: '8px', border: '1px solid hsl(var(--border))' }}
-            >
-              <option value="webgpu">WebGPU (GPU VRAM - 10M+ keys/sec)</option>
-              <option value="webgl">WebGL (Shader Accelerator)</option>
-              <option value="cpu">CPU (Multi-threaded Workers)</option>
-            </select>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginTop: '10px' }}>
+        <form onSubmit={handleSearch}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '10px', marginTop: '10px' }}>
             <div className="range-lookup-field" style={{ marginTop: 0 }}>
               <span>Network</span>
               <select
@@ -245,18 +143,6 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
                   <option key={opt.id} value={opt.id}>{opt.label} ({opt.symbol})</option>
                 ))}
               </select>
-            </div>
-            <div className="range-lookup-field" style={{ marginTop: 0 }}>
-              <span>Target Address</span>
-              <input
-                type="text"
-                value={targetAddress}
-                onChange={(e) => setTargetAddress(e.target.value)}
-                placeholder="1... or 0x..."
-                disabled={searching}
-                required
-                style={{ width: '100%', minHeight: '42px', padding: '0 10px', background: 'hsl(var(--background))', color: 'hsl(var(--foreground))', borderRadius: '8px', border: '1px solid hsl(var(--border))' }}
-              />
             </div>
           </div>
 
@@ -286,12 +172,43 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
           </div>
 
           <div style={{ marginTop: '15px' }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+              <span style={{ fontSize: '13px', color: 'hsl(var(--muted-foreground))' }}>CPU Threads (Workers)</span>
+              <input
+                type="range"
+                min="1"
+                max="8"
+                step="1"
+                value={numThreads}
+                onChange={(e) => setNumThreads(Number(e.target.value))}
+                disabled={searching}
+                style={{ width: '100%', cursor: 'pointer' }}
+              />
+              <span style={{ textAlign: 'center', fontWeight: 'bold', color: '#ffbd72' }}>{numThreads} Threads</span>
+            </label>
+          </div>
+
+          {/* 🛠️ خيار البلوكات الأوتوماتيكية */}
+          <div style={{ marginTop: '15px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <input
+              type="checkbox"
+              id="autoBlock"
+              checked={autoBlock}
+              onChange={(e) => setAutoBlock(e.target.checked)}
+              disabled={searching}
+            />
+            <label htmlFor="autoBlock" style={{ fontSize: '12px', color: 'hsl(var(--muted-foreground))', cursor: 'pointer' }}>
+              Automatically generate the next same-size block when this block finishes.
+            </label>
+          </div>
+
+          <div style={{ marginTop: '15px' }}>
             <button
               type="submit"
               className="range-lookup-search"
               style={{ width: '100%', padding: '12px', background: searching ? '#b23d32' : '#e77732', color: '#fff', border: 0, borderRadius: '8px', fontWeight: 700, cursor: 'pointer' }}
             >
-              {searching ? 'Stop Scan' : 'Start Hardware Scan'}
+              {searching ? 'Stop Scan' : 'Start Database Scan'}
             </button>
           </div>
         </form>
@@ -303,22 +220,21 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
         <div style={{ fontSize: '11px', color: 'hsl(var(--muted-foreground))', marginBottom: '6px' }}>LIVE TELEMETRY: {status.toUpperCase()}</div>
         {searching ? (
           <div style={{ fontSize: '13px', color: '#ffbd72' }}>
-            Searching...<br />
-            <span style={{ display: 'block', wordBreak: 'break-all', overflowWrap: 'anywhere', marginTop: '4px', color: 'hsl(var(--foreground))' }}>
+            Scanning Database...<br />
+            <span style={{ display: 'block', wordBreak: 'break-all', marginTop: '4px', color: 'hsl(var(--foreground))' }}>
               Key: {currentKey}
             </span>
+            {currentBlock && (
+              <span style={{ display: 'block', marginTop: '4px', color: 'hsl(var(--muted-foreground))', fontSize: '11px' }}>
+                {currentBlock}
+              </span>
+            )}
             <span style={{ display: 'block', marginTop: '4px', fontWeight: 'bold' }}>
-              Speed: {formatSpeed(keysPerSec)} keys/sec
+              Speed: {keysPerSec.toLocaleString()} keys/sec
             </span>
           </div>
         ) : (
           <div style={{ fontSize: '13px', color: 'hsl(var(--foreground))' }}>{status === 'Ready' ? 'Idle. Ready to scan.' : `Completed with status: ${status}`}</div>
-        )}
-
-        {progressPercent !== null && (
-          <div style={{ marginTop: '10px', height: '4px', background: 'hsl(var(--border))', borderRadius: '99px', overflow: 'hidden' }}>
-            <div style={{ width: `${Math.min(100, Math.max(0, progressPercent))}%`, height: '100%', background: '#e77732' }} />
-          </div>
         )}
       </section>
 
@@ -328,55 +244,22 @@ export default function BitcoinRangeLookupPage({ active }: { active: boolean }) 
           
           <div style={{ fontSize: '12px', marginBottom: '6px' }}>
             <span style={{ color: 'hsl(var(--muted-foreground))' }}>Address:</span>
-            <code style={{ display: 'block', color: 'hsl(var(--foreground))', wordBreak: 'break-all', overflowWrap: 'anywhere' }}>{match.address}</code>
-          </div>
-
-          {/* 🛠️ عرض الرصيد */}
-          <div style={{ fontSize: '12px', marginBottom: '6px' }}>
-            <span style={{ color: 'hsl(var(--muted-foreground))' }}>Balance:</span>
-            <span style={{ color: '#4ade80', fontWeight: 700, marginLeft: '6px' }}>{match.balance} {chain.toUpperCase()}</span>
-          </div>
-
-          <div style={{ fontSize: '12px', marginBottom: '6px' }}>
-            <span style={{ color: 'hsl(var(--muted-foreground))' }}>Range Discovered:</span>
-            <span style={{ color: '#ffbd72', marginLeft: '6px', wordBreak: 'break-all' }}>{match.rangeStartHex} → {match.rangeEndHex}</span>
+            <code style={{ display: 'block', color: 'hsl(var(--foreground))', wordBreak: 'break-all' }}>{match.address}</code>
           </div>
 
           <div style={{ fontSize: '12px', marginTop: '8px' }}>
             <span style={{ color: 'hsl(var(--muted-foreground))' }}>Private Key (Hex):</span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '2px', flexWrap: 'wrap' }}>
-              <code style={{ wordBreak: 'break-all', overflowWrap: 'anywhere', color: 'hsl(var(--foreground))' }}>{showPrivateKey ? match.privateKeyHex : '••••••••••••••••••••••••••••••••••••'}</code>
-              <button type="button" onClick={() => setShowPrivateKey(!showPrivateKey)} style={{ padding: '4px 8px', fontSize: '10px', cursor: 'pointer' }}>
-                <Eye size={10} /> {showPrivateKey ? 'Hide' : 'Reveal'}
-              </button>
-              {showPrivateKey && (
-                <button type="button" onClick={() => copyValue(match.privateKeyHex)} style={{ padding: '4px 8px', fontSize: '10px', cursor: 'pointer' }}>
-                  <Copy size={10} /> Copy
-                </button>
-              )}
-            </div>
+            <code style={{ display: 'block', wordBreak: 'break-all', color: 'hsl(var(--foreground))', marginTop: '2px' }}>{match.privateKeyHex}</code>
           </div>
 
-          {/* 🛠️ عرض الـ WIF */}
           {match.privateKeyWif && (
             <div style={{ fontSize: '12px', marginTop: '8px' }}>
               <span style={{ color: 'hsl(var(--muted-foreground))' }}>Private Key (WIF):</span>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '2px', flexWrap: 'wrap' }}>
-                <code style={{ wordBreak: 'break-all', overflowWrap: 'anywhere', color: 'hsl(var(--foreground))' }}>{showPrivateKey ? match.privateKeyWif : '••••••••••••••••••••••••••••••••••••'}</code>
-                {showPrivateKey && (
-                  <button type="button" onClick={() => copyValue(match.privateKeyWif)} style={{ padding: '4px 8px', fontSize: '10px', cursor: 'pointer' }}>
-                    <Copy size={10} /> Copy
-                  </button>
-                )}
-              </div>
+              <code style={{ display: 'block', wordBreak: 'break-all', color: 'hsl(var(--foreground))', marginTop: '2px' }}>{match.privateKeyWif}</code>
             </div>
           )}
         </div>
       )}
-
-      <footer className="donation-page-footer" style={{ marginTop: '20px' }}>
-        <DonationAddress />
-      </footer>
     </main>
   );
-        }
+              }
