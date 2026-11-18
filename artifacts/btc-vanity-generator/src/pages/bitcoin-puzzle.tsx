@@ -7,11 +7,13 @@ export default function BitcoinPuzzlePage() {
   const [startHex, setStartHex] = useState('1');
   const [endHex, setEndHex] = useState('100000');
   const [chain, setChain] = useState<MultiChainName>('btc');
-  const [numThreads, setNumThreads] = useState<number>(4); // 🛠️ عدد الـ Threads
+  const [numThreads, setNumThreads] = useState<number>(4);
+  const [autoBlock, setAutoBlock] = useState<boolean>(true); // 🛠️ خيار البلوكات الأوتوماتيكية
   
   const [status, setStatus] = useState('Ready');
   const [keysPerSec, setKeysPerSec] = useState(0);
   const [currentKey, setCurrentKey] = useState('');
+  const [currentBlock, setCurrentBlock] = useState('');
   const [match, setMatch] = useState<any>(null);
   const [notice, setNotice] = useState('');
   const [searching, setSearching] = useState(false);
@@ -38,7 +40,8 @@ export default function BitcoinPuzzlePage() {
     setMatch(null);
     setKeysPerSec(0);
     setCurrentKey(startHex);
-    setNotice('Fetching addresses from DB...');
+    setCurrentBlock(`Block: ${startHex} → ${endHex}`);
+    setNotice('Fetching addresses...');
 
     try {
       const startBig = BigInt(`0x${startHex.trim().replace(/^0x/i, '')}`);
@@ -71,6 +74,9 @@ export default function BitcoinPuzzlePage() {
             setKeysPerSec(totalSpeed);
             setCurrentKey(message.currentKeyHex);
             setNotice('Scanning Database...');
+          } else if (message.type === 'block_done') {
+            // 🛠️ كيتحدث البلوك اللي كيتقلب فيه دابا
+            setCurrentBlock(`Block: ${message.blockStart} → ${message.blockEnd}`);
           } else if (message.type === 'found') {
             setMatch(message.result);
             setStatus('Found');
@@ -101,6 +107,7 @@ export default function BitcoinPuzzlePage() {
           startHex: chunkStart.toString(16),
           endHex: chunkEnd.toString(16),
           chain,
+          autoBlock,
         });
       }
     } catch (err: any) {
@@ -165,7 +172,6 @@ export default function BitcoinPuzzlePage() {
             </div>
           </div>
 
-          {/* 🛠️ خانة اختيار عدد الـ Threads */}
           <div style={{ marginTop: '15px' }}>
             <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
               <span style={{ fontSize: '13px', color: 'hsl(var(--muted-foreground))' }}>CPU Threads (Workers)</span>
@@ -180,6 +186,20 @@ export default function BitcoinPuzzlePage() {
                 style={{ width: '100%', cursor: 'pointer' }}
               />
               <span style={{ textAlign: 'center', fontWeight: 'bold', color: '#ffbd72' }}>{numThreads} Threads</span>
+            </label>
+          </div>
+
+          {/* 🛠️ خيار البلوكات الأوتوماتيكية */}
+          <div style={{ marginTop: '15px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <input
+              type="checkbox"
+              id="autoBlock"
+              checked={autoBlock}
+              onChange={(e) => setAutoBlock(e.target.checked)}
+              disabled={searching}
+            />
+            <label htmlFor="autoBlock" style={{ fontSize: '12px', color: 'hsl(var(--muted-foreground))', cursor: 'pointer' }}>
+              Automatically generate the next same-size block when this block finishes.
             </label>
           </div>
 
@@ -205,6 +225,11 @@ export default function BitcoinPuzzlePage() {
             <span style={{ display: 'block', wordBreak: 'break-all', marginTop: '4px', color: 'hsl(var(--foreground))' }}>
               Key: {currentKey}
             </span>
+            {currentBlock && (
+              <span style={{ display: 'block', marginTop: '4px', color: 'hsl(var(--muted-foreground))', fontSize: '11px' }}>
+                {currentBlock}
+              </span>
+            )}
             <span style={{ display: 'block', marginTop: '4px', fontWeight: 'bold' }}>
               Speed: {keysPerSec.toLocaleString()} keys/sec
             </span>
@@ -238,4 +263,4 @@ export default function BitcoinPuzzlePage() {
       )}
     </main>
   );
-    }
+}
