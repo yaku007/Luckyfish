@@ -5,9 +5,10 @@ import './bitcoin-range-lookup.css';
 
 export default function BitcoinPuzzlePage() {
   const [startHex, setStartHex] = useState('1');
-  const [endHex, setEndHex] = useState('1000');
+  const [endHex, setEndHex] = useState('100000');
   const [chain, setChain] = useState<MultiChainName>('btc');
   const [numThreads, setNumThreads] = useState<number>(4);
+  const [autoBlock, setAutoBlock] = useState<boolean>(true); // 🛠️ خيار البلوكات الأوتوماتيكية
   
   const [status, setStatus] = useState('Ready');
   const [keysPerSec, setKeysPerSec] = useState(0);
@@ -39,6 +40,7 @@ export default function BitcoinPuzzlePage() {
     setMatch(null);
     setKeysPerSec(0);
     setCurrentKey(startHex);
+    setCurrentBlock(`Block: ${startHex} → ${endHex}`);
     setNotice('Fetching addresses...');
 
     try {
@@ -51,6 +53,7 @@ export default function BitcoinPuzzlePage() {
       const chunkSize = totalKeys / BigInt(numThreads);
       
       let totalSpeed = 0;
+      let finishedWorkers = 0;
       const speedMap = new Map<Worker, number>();
 
       for (let i = 0; i < numThreads; i++) {
@@ -72,7 +75,8 @@ export default function BitcoinPuzzlePage() {
             setCurrentKey(message.currentKeyHex);
             setNotice('Scanning Database...');
           } else if (message.type === 'block_done') {
-            setCurrentBlock(`Block: ${parseInt(message.blockStart, 16)} → ${parseInt(message.blockEnd, 16)}`);
+            // 🛠️ كيتحدث البلوك اللي كيتقلب فيه دابا
+            setCurrentBlock(`Block: ${message.blockStart} → ${message.blockEnd}`);
           } else if (message.type === 'found') {
             setMatch(message.result);
             setStatus('Found');
@@ -80,6 +84,15 @@ export default function BitcoinPuzzlePage() {
             setNotice(`🎯 Match found: ${message.result.address}`);
             workersRef.current.forEach(w => w.terminate());
             workersRef.current = [];
+          } else if (message.type === 'exhausted') {
+            finishedWorkers++;
+            if (finishedWorkers === numThreads) {
+              setStatus('Exhausted');
+              setSearching(false);
+              setNotice('Range fully scanned. No match found in database.');
+              workersRef.current.forEach(w => w.terminate());
+              workersRef.current = [];
+            }
           } else if (message.type === 'error') {
             setStatus('Error');
             setSearching(false);
@@ -94,6 +107,7 @@ export default function BitcoinPuzzlePage() {
           startHex: chunkStart.toString(16),
           endHex: chunkEnd.toString(16),
           chain,
+          autoBlock,
         });
       }
     } catch (err: any) {
@@ -175,6 +189,20 @@ export default function BitcoinPuzzlePage() {
             </label>
           </div>
 
+          {/* 🛠️ خيار البلوكات الأوتوماتيكية */}
+          <div style={{ marginTop: '15px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <input
+              type="checkbox"
+              id="autoBlock"
+              checked={autoBlock}
+              onChange={(e) => setAutoBlock(e.target.checked)}
+              disabled={searching}
+            />
+            <label htmlFor="autoBlock" style={{ fontSize: '12px', color: 'hsl(var(--muted-foreground))', cursor: 'pointer' }}>
+              Automatically generate the next same-size block when this block finishes.
+            </label>
+          </div>
+
           <div style={{ marginTop: '15px' }}>
             <button
               type="submit"
@@ -235,4 +263,4 @@ export default function BitcoinPuzzlePage() {
       )}
     </main>
   );
-          }
+      }
