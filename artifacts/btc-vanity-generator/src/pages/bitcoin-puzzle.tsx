@@ -41,7 +41,7 @@ export default function BitcoinPuzzlePage() {
     setKeysPerSec(0);
     setCurrentKey(startHex);
     setCurrentBlock(`Block: ${startHex} → ${endHex}`);
-    setNotice('Fetching addresses...');
+    setNotice('Fetching addresses from DB...');
 
     try {
       const startBig = BigInt(`0x${startHex.trim().replace(/^0x/i, '')}`);
@@ -75,7 +75,6 @@ export default function BitcoinPuzzlePage() {
             setCurrentKey(message.currentKeyHex);
             setNotice('Scanning Database...');
           } else if (message.type === 'block_done') {
-            // 🛠️ كيتحدث البلوك اللي كيتقلب فيه دابا
             setCurrentBlock(`Block: ${message.blockStart} → ${message.blockEnd}`);
           } else if (message.type === 'found') {
             setMatch(message.result);
@@ -107,7 +106,7 @@ export default function BitcoinPuzzlePage() {
           startHex: chunkStart.toString(16),
           endHex: chunkEnd.toString(16),
           chain,
-          autoBlock,
+          autoBlock, // 🛠️ كنصيفطو الخيار للـ Worker
         });
       }
     } catch (err: any) {
@@ -263,4 +262,4 @@ export default function BitcoinPuzzlePage() {
       )}
     </main>
   );
-      }
+         }
