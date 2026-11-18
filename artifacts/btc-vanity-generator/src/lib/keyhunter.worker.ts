@@ -64,10 +64,11 @@ self.onmessage = async (event) => {
   const { startHex, endHex, chain = 'btc' } = msg;
   const isEvm = chain && chain !== 'btc' && chain !== 'bitcoin';
   
-  let start = BigInt(`0x${startHex.replace(/^0x/i, "")}`);
-  let end = BigInt(`0x${endHex.replace(/^0x/i, "")}`);
+  const start = BigInt(`0x${startHex.replace(/^0x/i, "")}`);
+  const end = BigInt(`0x${endHex.replace(/^0x/i, "")}`);
+  const blockSize = end - start + 1n;
 
-  // 🛠️ جلب العناوين من الداتابيز مرة واحدة
+  // جلب العناوين من الداتابيز مرة واحدة
   let dbAddresses: Set<string> = new Set();
   try {
     const response = await fetch('/api/get-all-addresses');
@@ -85,47 +86,52 @@ self.onmessage = async (event) => {
     return;
   }
 
-  const startedAt = Date.now();
+  let currentBlockStart = start;
   let attempts = 0;
+  const startedAt = Date.now();
 
-  for (let i = start; i <= end; i++) {
-    if (stopped) { self.postMessage({ type: 'exhausted' }); return; }
+  // 🛠️ حلقة لا نهائية باش يمشي بلوك ورا بلوك
+  while (true) {
+    const currentBlockEnd = currentBlockStart + blockSize - 1n;
+    
+    for (let i = currentBlockStart; i <= currentBlockEnd; i++) {
+      if (stopped) { self.postMessage({ type: 'exhausted' }); return; }
 
-    let privateKey = new Uint8Array(32);
-    let temp = i;
-    for (let j = 31; j >= 0; j--) { privateKey[j] = Number(temp & 0xffn); temp >>= 8n; }
+      const privateKey = new Uint8Array(32);
+      let temp = i;
+      for (let j = 31; j >= 0; j--) { privateKey[j] = Number(temp & 0xffn); temp >>= 8n; }
 
-    const pubKey = secp256k1.getPublicKey(privateKey, !isEvm); 
-    const address = isEvm ? evmAddress(pubKey) : legacyBtcAddress(pubKey);
-    const privateKeyHex = i.toString(16).padStart(64, '0');
-    const privateKeyWif = isEvm ? `0x${privateKeyHex}` : privateKeyToWif(privateKey);
+      const pubKey = secp256k1.getPublicKey(privateKey, !isEvm); 
+      const address = isEvm ? evmAddress(pubKey) : legacyBtcAddress(pubKey);
+      const privateKeyHex = i.toString(16).padStart(64, '0');
+      const privateKeyWif = isEvm ? `0x${privateKeyHex}` : privateKeyToWif(privateKey);
 
-    const isMatch = dbAddresses.has(isEvm ? address.toLowerCase() : address);
+      if (dbAddresses.has(isEvm ? address.toLowerCase() : address)) {
+        self.postMessage({ 
+          type: 'found', 
+          result: { address, privateKeyHex, privateKeyWif, matchedKeyHex: i.toString(16) }
+        });
+        return;
+      }
 
-    if (isMatch) {
-      self.postMessage({ 
-        type: 'found', 
-        result: {
-          address, 
-          privateKeyHex, 
-          privateKeyWif, 
-          matchedKeyHex: i.toString(16)
-        }
-      });
-      return;
+      attempts++;
+      if (attempts % 5000 === 0) {
+        const elapsedMs = Math.max(1, Date.now() - startedAt);
+        self.postMessage({ 
+          type: "progress", 
+          speed: Math.floor((attempts / elapsedMs) * 1000), 
+          currentKeyHex: i.toString(16) 
+        });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
     }
 
-    attempts++;
-    if (attempts % 5000 === 0) {
-      const elapsedMs = Math.max(1, Date.now() - startedAt);
-      self.postMessage({ 
-        type: "progress", 
-        speed: Math.floor((attempts / elapsedMs) * 1000), 
-        currentKeyHex: i.toString(16) 
-      });
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    }
+    // ملي كيسالي البلوك، كيصيفط رسالة للصفحة باش تحدث، وكيمشي للبلوك اللي من بعدو
+    self.postMessage({ 
+      type: 'block_done', 
+      blockStart: currentBlockStart.toString(16), 
+      blockEnd: currentBlockEnd.toString(16) 
+    });
+    currentBlockStart = currentBlockEnd + 1n;
   }
-  
-  self.postMessage({ type: 'exhausted' });
 };
