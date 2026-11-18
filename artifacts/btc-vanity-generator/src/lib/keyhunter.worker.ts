@@ -61,12 +61,11 @@ self.onmessage = async (event) => {
   if (msg.type !== 'scan') return;
 
   stopped = false;
-  const { startHex, endHex, chain = 'btc', autoBlock = false } = msg;
+  const { startHex, endHex, chain = 'btc' } = msg;
   const isEvm = chain && chain !== 'btc' && chain !== 'bitcoin';
   
-  let currentStart = BigInt(`0x${startHex.replace(/^0x/i, "")}`);
-  let currentEnd = BigInt(`0x${endHex.replace(/^0x/i, "")}`);
-  const blockSize = currentEnd - currentStart + 1n;
+  let start = BigInt(`0x${startHex.replace(/^0x/i, "")}`);
+  let end = BigInt(`0x${endHex.replace(/^0x/i, "")}`);
 
   // 🛠️ جلب العناوين من الداتابيز مرة واحدة
   let dbAddresses: Set<string> = new Set();
@@ -86,55 +85,47 @@ self.onmessage = async (event) => {
     return;
   }
 
-  let attempts = 0;
   const startedAt = Date.now();
-  let found = false; // 🛠️ متغير باش نعرفو واش لقينا
+  let attempts = 0;
 
-  while (true) {
-    for (let i = currentStart; i <= currentEnd; i++) {
-      if (stopped) { self.postMessage({ type: 'exhausted' }); return; }
+  for (let i = start; i <= end; i++) {
+    if (stopped) { self.postMessage({ type: 'exhausted' }); return; }
 
-      let privateKey = new Uint8Array(32);
-      let temp = i;
-      for (let j = 31; j >= 0; j--) { privateKey[j] = Number(temp & 0xffn); temp >>= 8n; }
+    let privateKey = new Uint8Array(32);
+    let temp = i;
+    for (let j = 31; j >= 0; j--) { privateKey[j] = Number(temp & 0xffn); temp >>= 8n; }
 
-      const pubKey = secp256k1.getPublicKey(privateKey, !isEvm); 
-      const address = isEvm ? evmAddress(pubKey) : legacyBtcAddress(pubKey);
-      const privateKeyHex = i.toString(16).padStart(64, '0');
-      const privateKeyWif = isEvm ? `0x${privateKeyHex}` : privateKeyToWif(privateKey);
+    const pubKey = secp256k1.getPublicKey(privateKey, !isEvm); 
+    const address = isEvm ? evmAddress(pubKey) : legacyBtcAddress(pubKey);
+    const privateKeyHex = i.toString(16).padStart(64, '0');
+    const privateKeyWif = isEvm ? `0x${privateKeyHex}` : privateKeyToWif(privateKey);
 
-      if (dbAddresses.has(isEvm ? address.toLowerCase() : address)) {
-        self.postMessage({ 
-          type: 'found', 
-          result: { address, privateKeyHex, privateKeyWif, matchedKeyHex: i.toString(16) }
-        });
-        found = true;
-        break; // 🛠️ كنخرجو من الـ for loop
-      }
+    const isMatch = dbAddresses.has(isEvm ? address.toLowerCase() : address);
 
-      attempts++;
-      if (attempts % 5000 === 0) {
-        const elapsedMs = Math.max(1, Date.now() - startedAt);
-        self.postMessage({ 
-          type: "progress", 
-          speed: Math.floor((attempts / elapsedMs) * 1000), 
-          currentKeyHex: i.toString(16) 
-        });
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      }
-    }
-
-    if (found) return; // 🛠️ إلا لقينا، كنوقفو هنا
-
-    self.postMessage({ type: 'block_done', blockStart: currentStart.toString(16), blockEnd: currentEnd.toString(16) });
-
-    if (autoBlock) {
-      currentStart = currentEnd + 1n;
-      currentEnd = currentStart + blockSize - 1n;
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    } else {
-      self.postMessage({ type: 'exhausted' });
+    if (isMatch) {
+      self.postMessage({ 
+        type: 'found', 
+        result: {
+          address, 
+          privateKeyHex, 
+          privateKeyWif, 
+          matchedKeyHex: i.toString(16)
+        }
+      });
       return;
     }
+
+    attempts++;
+    if (attempts % 5000 === 0) {
+      const elapsedMs = Math.max(1, Date.now() - startedAt);
+      self.postMessage({ 
+        type: "progress", 
+        speed: Math.floor((attempts / elapsedMs) * 1000), 
+        currentKeyHex: i.toString(16) 
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
   }
+  
+  self.postMessage({ type: 'exhausted' });
 };
