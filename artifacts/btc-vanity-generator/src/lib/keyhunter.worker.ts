@@ -66,11 +66,9 @@ self.onmessage = async (event) => {
   
   let currentStart = BigInt(`0x${startHex.replace(/^0x/i, "")}`);
   let currentEnd = BigInt(`0x${endHex.replace(/^0x/i, "")}`);
-  
-  // 🛠️ حساب حجم البلوك (Block Size)
   const blockSize = currentEnd - currentStart + 1n;
 
-  // 🛠️ جلب العناوين من الداتابيز مرة واحدة
+  // جلب العناوين
   let dbAddresses: Set<string> = new Set();
   try {
     const response = await fetch('/api/get-all-addresses');
@@ -90,8 +88,8 @@ self.onmessage = async (event) => {
 
   let attempts = 0;
   const startedAt = Date.now();
+  let found = false; // 🛠️ متغير باش نعرفو واش لقينا شي حاجة
 
-  // 🛠️ الحلقة اللا نهائية (Infinite Loop) إلا كان autoBlock مفعل
   while (true) {
     for (let i = currentStart; i <= currentEnd; i++) {
       if (stopped) { self.postMessage({ type: 'exhausted' }); return; }
@@ -110,7 +108,8 @@ self.onmessage = async (event) => {
           type: 'found', 
           result: { address, privateKeyHex, privateKeyWif, matchedKeyHex: i.toString(16) }
         });
-        return;
+        found = true;
+        break; // 🛠️ كنخرجو من الـ for loop
       }
 
       attempts++;
@@ -125,16 +124,15 @@ self.onmessage = async (event) => {
       }
     }
 
-    // 🛠️ ملي كيسالي البلوك
+    if (found) return; // 🛠️ إلا لقينا، كنوقفو هنا ونرجعو
+
     self.postMessage({ type: 'block_done', blockStart: currentStart.toString(16), blockEnd: currentEnd.toString(16) });
 
-    // 🛠️ إلا كان autoBlock مفعل، كيمشي للبلوك اللي من بعدو
     if (autoBlock) {
       currentStart = currentEnd + 1n;
       currentEnd = currentStart + blockSize - 1n;
-      await new Promise((resolve) => setTimeout(resolve, 100)); // باش ما نعلقوش الـ UI
+      await new Promise((resolve) => setTimeout(resolve, 50));
     } else {
-      // إلا ما كانش autoBlock، كيسالي هنا
       self.postMessage({ type: 'exhausted' });
       return;
     }
