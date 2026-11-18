@@ -68,7 +68,7 @@ self.onmessage = async (event) => {
   let currentEnd = BigInt(`0x${endHex.replace(/^0x/i, "")}`);
   const blockSize = currentEnd - currentStart + 1n;
 
-  // جلب العناوين
+  // 🛠️ جلب العناوين من الداتابيز مرة واحدة
   let dbAddresses: Set<string> = new Set();
   try {
     const response = await fetch('/api/get-all-addresses');
@@ -88,7 +88,7 @@ self.onmessage = async (event) => {
 
   let attempts = 0;
   const startedAt = Date.now();
-  let found = false; // 🛠️ متغير باش نعرفو واش لقينا شي حاجة
+  let found = false; // 🛠️ متغير باش نعرفو واش لقينا
 
   while (true) {
     for (let i = currentStart; i <= currentEnd; i++) {
@@ -124,7 +124,7 @@ self.onmessage = async (event) => {
       }
     }
 
-    if (found) return; // 🛠️ إلا لقينا، كنوقفو هنا ونرجعو
+    if (found) return; // 🛠️ إلا لقينا، كنوقفو هنا
 
     self.postMessage({ type: 'block_done', blockStart: currentStart.toString(16), blockEnd: currentEnd.toString(16) });
 
